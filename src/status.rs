@@ -4,7 +4,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::graph::{Graph, NodeKind};
+use crate::graph::{EdgeKind, Graph, NodeKind};
+use crate::resolve::short_hash;
 use crate::scan::markdown::parse_markdown;
 
 #[derive(Serialize)]
@@ -25,6 +26,8 @@ pub struct Stage {
 
 #[derive(Serialize)]
 pub struct TaskSummary {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub short: Option<String>,
     pub id: String,
     pub label: String,
     pub status: String,
@@ -38,7 +41,7 @@ pub struct SubtaskCount {
     pub done: usize,
 }
 
-pub fn run(roadmap_path: &Path) -> Result<()> {
+pub fn run(roadmap_path: &Path, hash: bool) -> Result<()> {
     let content = fs::read_to_string(roadmap_path)
         .with_context(|| format!("cannot read {}", roadmap_path.display()))?;
     let file_id = roadmap_path
@@ -47,22 +50,27 @@ pub fn run(roadmap_path: &Path) -> Result<()> {
         .unwrap_or_else(|| "ROADMAP.md".into());
 
     let mut graph = Graph::default();
-    parse_markdown(&file_id, &content, &mut graph);
+    parse_markdown(&file_id, &content, &mut graph, &mut Vec::new());
 
-    // Build parent → children map
+    let output = build(&graph, hash);
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}
+
+pub fn build(graph: &Graph, hash: bool) -> StatusOutput {
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
     for edge in &graph.edges {
-        children
-            .entry(edge.source.clone())
-            .or_default()
-            .push(edge.target.clone());
+        if edge.kind == EdgeKind::Contains {
+            children
+                .entry(edge.source.clone())
+                .or_default()
+                .push(edge.target.clone());
+        }
     }
 
-    // Index nodes by id
     let node_map: HashMap<&str, &crate::graph::Node> =
         graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
-    // Find stage sections (level 2 headings)
     let mut stages = Vec::new();
     let mut total_all = 0usize;
     let mut done_all = 0usize;
@@ -131,6 +139,7 @@ pub fn run(roadmap_path: &Path) -> Result<()> {
             };
 
             stage_tasks.push(TaskSummary {
+                short: if hash { Some(short_hash(child_id)) } else { None },
                 id: child_id.clone(),
                 label: child.label.clone(),
                 status,
@@ -151,13 +160,10 @@ pub fn run(roadmap_path: &Path) -> Result<()> {
         });
     }
 
-    let output = StatusOutput {
+    StatusOutput {
         total: total_all,
         done: done_all,
         todo: total_all - done_all,
         stages,
-    };
-
-    println!("{}", serde_json::to_string_pretty(&output)?);
-    Ok(())
+    }
 }

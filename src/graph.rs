@@ -13,6 +13,8 @@ pub enum NodeKind {
 #[serde(rename_all = "snake_case")]
 pub enum EdgeKind {
     Contains,
+    References,
+    Sequence,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

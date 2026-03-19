@@ -1,4 +1,4 @@
-use crate::graph::{Edge, Graph, Node, NodeKind};
+use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 use std::collections::{HashSet, VecDeque};
 
 pub enum Traversal {
@@ -7,6 +7,9 @@ pub enum Traversal {
     Children(String),
     Descendants(String),
     Ancestors(String),
+    References(String),
+    ReferencedBy(String),
+    Next(String),
 }
 
 pub enum FilterOp {
@@ -73,7 +76,9 @@ pub fn execute(graph: &Graph, traversal: &Traversal, filters: &[Filter]) -> Grap
             graph.nodes.iter().map(|n| n.id.as_str()).filter(|id| !targets.contains(id)).collect()
         }
         Traversal::Children(id) => {
-            graph.edges.iter().filter(|e| e.source == *id).map(|e| e.target.as_str()).collect()
+            graph.edges.iter()
+                .filter(|e| e.source == *id && e.kind == EdgeKind::Contains)
+                .map(|e| e.target.as_str()).collect()
         }
         Traversal::Descendants(id) => {
             let mut result = HashSet::new();
@@ -81,7 +86,7 @@ pub fn execute(graph: &Graph, traversal: &Traversal, filters: &[Filter]) -> Grap
             queue.push_back(id.as_str());
             while let Some(cur) = queue.pop_front() {
                 for e in &graph.edges {
-                    if e.source == cur && result.insert(e.target.as_str()) {
+                    if e.source == cur && e.kind == EdgeKind::Contains && result.insert(e.target.as_str()) {
                         queue.push_back(e.target.as_str());
                     }
                 }
@@ -94,12 +99,30 @@ pub fn execute(graph: &Graph, traversal: &Traversal, filters: &[Filter]) -> Grap
             queue.push_back(id.as_str());
             while let Some(cur) = queue.pop_front() {
                 for e in &graph.edges {
-                    if e.target == cur && result.insert(e.source.as_str()) {
+                    if e.target == cur && e.kind == EdgeKind::Contains && result.insert(e.source.as_str()) {
                         queue.push_back(e.source.as_str());
                     }
                 }
             }
             result
+        }
+        Traversal::References(id) => {
+            graph.edges.iter()
+                .filter(|e| e.source == *id && e.kind == EdgeKind::References)
+                .map(|e| e.target.as_str())
+                .collect()
+        }
+        Traversal::ReferencedBy(id) => {
+            graph.edges.iter()
+                .filter(|e| e.target == *id && e.kind == EdgeKind::References)
+                .map(|e| e.source.as_str())
+                .collect()
+        }
+        Traversal::Next(id) => {
+            graph.edges.iter()
+                .filter(|e| e.source == *id && e.kind == EdgeKind::Sequence)
+                .map(|e| e.target.as_str())
+                .collect()
         }
     };
 
@@ -243,5 +266,49 @@ mod tests {
         // Only edge between tasks survives: child2 -> grandchild
         assert_eq!(result.edges.len(), 1);
         assert_eq!(result.edges[0].source, "child2");
+    }
+
+    fn ref_graph() -> Graph {
+        let nodes = vec![
+            Node { id: "a".into(), kind: NodeKind::Section, source: "markdown".into(), label: "A".into(), metadata: None },
+            Node { id: "b".into(), kind: NodeKind::File, source: "filesystem".into(), label: "B".into(), metadata: None },
+            Node { id: "c".into(), kind: NodeKind::Section, source: "markdown".into(), label: "C".into(), metadata: None },
+        ];
+        let edges = vec![
+            Edge { source: "a".into(), target: "b".into(), kind: EdgeKind::References },
+            Edge { source: "a".into(), target: "c".into(), kind: EdgeKind::References },
+            Edge { source: "c".into(), target: "b".into(), kind: EdgeKind::References },
+            Edge { source: "a".into(), target: "c".into(), kind: EdgeKind::Contains },
+        ];
+        Graph { nodes, edges }
+    }
+
+    #[test]
+    fn traversal_references() {
+        let g = ref_graph();
+        let result = execute(&g, &Traversal::References("a".into()), &[]);
+        let ids: HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains("b"));
+        assert!(ids.contains("c"));
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn traversal_referenced_by() {
+        let g = ref_graph();
+        let result = execute(&g, &Traversal::ReferencedBy("b".into()), &[]);
+        let ids: HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains("a"));
+        assert!(ids.contains("c"));
+        assert_eq!(ids.len(), 2);
+    }
+
+    #[test]
+    fn references_with_filter() {
+        let g = ref_graph();
+        let filters = vec![Filter::parse("type=file").unwrap()];
+        let result = execute(&g, &Traversal::References("a".into()), &filters);
+        assert_eq!(result.nodes.len(), 1);
+        assert_eq!(result.nodes[0].id, "b");
     }
 }

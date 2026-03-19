@@ -9,8 +9,21 @@ use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 
 pub struct MarkdownScanner;
 
+pub struct RawLink {
+    pub source_node: String,
+    pub target_url: String,
+    pub source_file: String,
+}
+
 impl Scanner for MarkdownScanner {
     fn scan(&self, root: &Path) -> Result<Graph> {
+        let mut links = Vec::new();
+        self.scan_with_links(root, &mut links)
+    }
+}
+
+impl MarkdownScanner {
+    pub fn scan_with_links(&self, root: &Path, links: &mut Vec<RawLink>) -> Result<Graph> {
         let root = root.canonicalize()?;
         let mut graph = Graph::default();
 
@@ -38,7 +51,7 @@ impl Scanner for MarkdownScanner {
                 rel.to_string_lossy().replace('\\', "/")
             };
             let content = fs::read_to_string(abs)?;
-            parse_markdown(&file_id, &content, &mut graph);
+            parse_markdown(&file_id, &content, &mut graph, links);
         }
 
         Ok(graph)
@@ -81,7 +94,7 @@ struct PendingTask {
     id: Option<String>,
 }
 
-fn make_id(file_id: &str, slug: &str, slug_counts: &mut HashMap<String, usize>) -> String {
+pub(crate) fn make_id(file_id: &str, slug: &str, slug_counts: &mut HashMap<String, usize>) -> String {
     let count = slug_counts.entry(slug.to_string()).or_insert(0);
     *count += 1;
     if *count == 1 {
@@ -91,13 +104,26 @@ fn make_id(file_id: &str, slug: &str, slug_counts: &mut HashMap<String, usize>) 
     }
 }
 
-pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph) {
+fn looks_like_path(s: &str) -> bool {
+    if s.contains('/') {
+        return true;
+    }
+    const EXTENSIONS: &[&str] = &[
+        ".rs", ".md", ".toml", ".json", ".yaml", ".yml",
+        ".js", ".ts", ".py", ".go", ".sh", ".txt",
+        ".html", ".css", ".xml",
+    ];
+    EXTENSIONS.iter().any(|ext| s.ends_with(ext))
+}
+
+pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, links: &mut Vec<RawLink>) {
     let parser = Parser::new_ext(content, Options::ENABLE_TASKLISTS);
 
     let mut heading_stack: Vec<(u8, String)> = Vec::new();
     let mut slug_counts: HashMap<String, usize> = HashMap::new();
     let mut task_stack: Vec<PendingTask> = Vec::new();
     let mut list_depth: usize = 0;
+    let mut last_sibling: HashMap<String, String> = HashMap::new();
 
     let mut in_heading = false;
     let mut current_heading_level: u8 = 0;
@@ -136,10 +162,19 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph) {
                     metadata: Some(serde_json::json!({"level": current_heading_level})),
                 });
                 graph.edges.push(Edge {
-                    source: parent_id,
+                    source: parent_id.clone(),
                     target: section_id.clone(),
                     kind: EdgeKind::Contains,
                 });
+
+                if let Some(prev) = last_sibling.get(&parent_id) {
+                    graph.edges.push(Edge {
+                        source: prev.clone(),
+                        target: section_id.clone(),
+                        kind: EdgeKind::Sequence,
+                    });
+                }
+                last_sibling.insert(parent_id, section_id.clone());
 
                 heading_stack.push((current_heading_level, section_id));
             }
@@ -193,10 +228,19 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph) {
                     metadata: Some(serde_json::json!({"status": status})),
                 });
                 graph.edges.push(Edge {
-                    source: parent_id,
-                    target: task_id,
+                    source: parent_id.clone(),
+                    target: task_id.clone(),
                     kind: EdgeKind::Contains,
                 });
+
+                if let Some(prev) = last_sibling.get(&parent_id) {
+                    graph.edges.push(Edge {
+                        source: prev.clone(),
+                        target: task_id.clone(),
+                        kind: EdgeKind::Sequence,
+                    });
+                }
+                last_sibling.insert(parent_id, task_id);
             }
             Event::Text(text) => {
                 if in_heading {
@@ -218,6 +262,17 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph) {
                             top.text.push_str(&code);
                         }
                     }
+                    if looks_like_path(&code) {
+                        let source_node = heading_stack
+                            .last()
+                            .map(|(_, id)| id.clone())
+                            .unwrap_or_else(|| file_id.to_string());
+                        links.push(RawLink {
+                            source_node,
+                            target_url: code.to_string(),
+                            source_file: file_id.to_string(),
+                        });
+                    }
                 }
             }
             Event::Start(Tag::CodeBlock(_)) => {
@@ -225,6 +280,19 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph) {
             }
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                if !in_code_block {
+                    let source_node = heading_stack
+                        .last()
+                        .map(|(_, id)| id.clone())
+                        .unwrap_or_else(|| file_id.to_string());
+                    links.push(RawLink {
+                        source_node,
+                        target_url: dest_url.to_string(),
+                        source_file: file_id.to_string(),
+                    });
+                }
             }
             _ => {}
         }
@@ -238,8 +306,16 @@ mod tests {
 
     fn parse(md: &str) -> Graph {
         let mut g = Graph::default();
-        parse_markdown("test.md", md, &mut g);
+        let mut links = Vec::new();
+        parse_markdown("test.md", md, &mut g, &mut links);
         g
+    }
+
+    fn parse_links(md: &str) -> Vec<RawLink> {
+        let mut g = Graph::default();
+        let mut links = Vec::new();
+        parse_markdown("test.md", md, &mut g, &mut links);
+        links
     }
 
     fn node_ids(g: &Graph, kind: NodeKind) -> Vec<&str> {
@@ -252,6 +328,13 @@ mod tests {
 
     fn edge_pairs(g: &Graph) -> Vec<(&str, &str)> {
         g.edges.iter().map(|e| (e.source.as_str(), e.target.as_str())).collect()
+    }
+
+    fn seq_edges(g: &Graph) -> Vec<(&str, &str)> {
+        g.edges.iter()
+            .filter(|e| e.kind == EdgeKind::Sequence)
+            .map(|e| (e.source.as_str(), e.target.as_str()))
+            .collect()
     }
 
     #[test]
@@ -328,5 +411,76 @@ mod tests {
         let a = serde_json::to_string(&parse(md)).unwrap();
         let b = serde_json::to_string(&parse(md)).unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn link_extraction_path() {
+        let links = parse_links("# S\nSee [readme](README.md) for details.\n");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target_url, "README.md");
+        assert_eq!(links[0].source_node, "test.md#s");
+        assert_eq!(links[0].source_file, "test.md");
+    }
+
+    #[test]
+    fn link_extraction_anchor() {
+        let links = parse_links("# S\nSee [section](#other-section) below.\n");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target_url, "#other-section");
+    }
+
+    #[test]
+    fn link_extraction_inline_code_path() {
+        let links = parse_links("# S\nCheck `src/main.rs` for entry point.\n");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target_url, "src/main.rs");
+    }
+
+    #[test]
+    fn link_extraction_skips_code_block() {
+        let md = "# S\n```\n[not a link](path.md)\n`src/file.rs`\n```\n";
+        let links = parse_links(md);
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn link_extraction_skips_inline_code_in_heading() {
+        let links = parse_links("# The `main.rs` module\nSome text.\n");
+        assert!(links.is_empty());
+    }
+
+    #[test]
+    fn link_extraction_multiple() {
+        let md = "# S\n[a](one.md) and [b](two.md)\n";
+        let links = parse_links(md);
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].target_url, "one.md");
+        assert_eq!(links[1].target_url, "two.md");
+    }
+
+    #[test]
+    fn sequence_edges_sibling_tasks() {
+        let g = parse("# S\n- [ ] A\n- [ ] B\n- [ ] C\n");
+        let seq = seq_edges(&g);
+        assert_eq!(seq.len(), 2);
+        assert!(seq.contains(&("test.md#a", "test.md#b")));
+        assert!(seq.contains(&("test.md#b", "test.md#c")));
+    }
+
+    #[test]
+    fn sequence_edges_sibling_sections() {
+        let g = parse("# S\n## X\n## Y\n");
+        let seq = seq_edges(&g);
+        assert_eq!(seq.len(), 1);
+        assert!(seq.contains(&("test.md#x", "test.md#y")));
+    }
+
+    #[test]
+    fn sequence_edges_nested_no_cross_level() {
+        let g = parse("# S\n- [ ] A\n  - [ ] A1\n  - [ ] A2\n- [ ] B\n");
+        let seq = seq_edges(&g);
+        assert!(seq.contains(&("test.md#a", "test.md#b")));
+        assert!(seq.contains(&("test.md#a1", "test.md#a2")));
+        assert_eq!(seq.len(), 2);
     }
 }

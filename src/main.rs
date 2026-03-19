@@ -1,9 +1,12 @@
+mod diff;
 mod graph;
 mod output;
 mod query;
+mod resolve;
 mod scan;
 mod status;
 mod context;
+mod update;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -14,6 +17,10 @@ use std::path::PathBuf;
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    /// Show short hash IDs in output (hidden by default to save context)
+    #[arg(long, global = true)]
+    hash: bool,
 }
 
 #[derive(Subcommand)]
@@ -34,10 +41,32 @@ enum Commands {
         #[arg(long, default_value = "ROADMAP.md")]
         roadmap: PathBuf,
     },
-    /// Load context for a task by name
+    /// Show context for any node by ID, short hash, or slug
     Context {
-        /// Task name or slug to look up
-        query: String,
+        /// Node ID (short hash, slug, or full ID)
+        id: String,
+
+        /// Project root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Compare current scan against cached .topology.json
+    Diff {
+        /// Path to scan
+        #[arg(default_value = ".")]
+        path: PathBuf,
+    },
+    /// Update a node in its source markdown file
+    Update {
+        /// Node ID (e.g. "ROADMAP.md#some-task")
+        id: String,
+
+        /// Field assignment (e.g. "status=done")
+        assignment: String,
 
         /// Project root directory
         #[arg(long, default_value = ".")]
@@ -45,13 +74,21 @@ enum Commands {
     },
     /// Query the topology graph with traversal and filters
     Query {
-        /// Filter expressions (e.g. type=task, status=todo, label~keyword)
-        #[arg(trailing_var_arg = true)]
+        /// Filter expressions (e.g. -f type=task -f status=todo -f "label~keyword")
+        #[arg(short = 'f', long = "filter")]
         filters: Vec<String>,
 
         /// Path to scan
         #[arg(long, default_value = ".")]
         path: PathBuf,
+
+        /// Output format
+        #[arg(long, default_value = "json")]
+        format: output::OutputFormat,
+
+        /// Print only the count of matching nodes
+        #[arg(long)]
+        count: bool,
 
         /// Show only root nodes (no incoming edges)
         #[arg(long, group = "traversal")]
@@ -68,32 +105,82 @@ enum Commands {
         /// Show ancestors of a node
         #[arg(long, group = "traversal")]
         ancestors: Option<String>,
+
+        /// Show nodes that a node references (outgoing reference edges)
+        #[arg(long, group = "traversal")]
+        references: Option<String>,
+
+        /// Show nodes that reference a node (incoming reference edges)
+        #[arg(long, group = "traversal")]
+        referenced_by: Option<String>,
+
+        /// Show the next sibling in document order (sequence edge)
+        #[arg(long, group = "traversal")]
+        next: Option<String>,
+
+        /// Show status summary (stages, task counts, progress)
+        #[arg(long)]
+        status: bool,
     },
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    let hash = cli.hash;
     match cli.command {
         Commands::Scan { path, layer } => {
             let graph = scan::run_all(&path, layer.as_deref())?;
-            output::print_json(&graph)?;
+            scan::write_cache_for(&path, &graph);
+            output::print_json(&graph, hash)?;
         }
         Commands::Status { roadmap } => {
-            status::run(&roadmap)?;
+            status::run(&roadmap, hash)?;
         }
-        Commands::Context { query, root } => {
-            context::run(&query, &root)?;
+        Commands::Context { id, root, json } => {
+            let graph = scan::run_cached(&root, None)?;
+            let canonical = resolve::resolve(&graph, &id)?;
+            context::run(&canonical, &graph, &root, json, !hash)?;
         }
-        Commands::Query { filters, path, roots, children, descendants, ancestors } => {
-            let graph = scan::run_all(&path, None)?;
+        Commands::Diff { path } => {
+            diff::run(&path)?;
+        }
+        Commands::Update { id, assignment, root } => {
+            let graph = scan::run_cached(&root, None)?;
+            let canonical = resolve::resolve(&graph, &id)?;
+            update::run(&canonical, &assignment, &root)?;
+        }
+        Commands::Query { filters, path, format, count, roots, children, descendants, ancestors, references, referenced_by, next, status: show_status } => {
+            let graph = scan::run_cached(&path, None)?;
+
+            if show_status {
+                use std::collections::HashSet;
+                let mut roadmap = graph.clone();
+                roadmap.nodes.retain(|n| n.id.starts_with("ROADMAP.md"));
+                let valid: HashSet<&str> = roadmap.nodes.iter().map(|n| n.id.as_str()).collect();
+                roadmap.edges.retain(|e| valid.contains(e.source.as_str()) && valid.contains(e.target.as_str()));
+                let s = status::build(&roadmap, hash);
+                println!("{}", serde_json::to_string_pretty(&s)?);
+                return Ok(());
+            }
+
+            let resolve_id = |id: String| -> Result<String> {
+                resolve::resolve(&graph, &id)
+            };
+
             let traversal = if roots {
                 query::Traversal::Roots
             } else if let Some(id) = children {
-                query::Traversal::Children(id)
+                query::Traversal::Children(resolve_id(id)?)
             } else if let Some(id) = descendants {
-                query::Traversal::Descendants(id)
+                query::Traversal::Descendants(resolve_id(id)?)
             } else if let Some(id) = ancestors {
-                query::Traversal::Ancestors(id)
+                query::Traversal::Ancestors(resolve_id(id)?)
+            } else if let Some(id) = references {
+                query::Traversal::References(resolve_id(id)?)
+            } else if let Some(id) = referenced_by {
+                query::Traversal::ReferencedBy(resolve_id(id)?)
+            } else if let Some(id) = next {
+                query::Traversal::Next(resolve_id(id)?)
             } else {
                 query::Traversal::None
             };
@@ -102,7 +189,11 @@ fn main() -> Result<()> {
                 .filter_map(|s| query::Filter::parse(s))
                 .collect();
             let result = query::execute(&graph, &traversal, &parsed);
-            output::print_json(&result)?;
+            if count {
+                output::print_count(&result);
+            } else {
+                output::print_graph(&result, &format, hash)?;
+            }
         }
     }
     Ok(())

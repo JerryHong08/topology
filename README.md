@@ -1,16 +1,16 @@
 # Topology
 
-topology is a interface for agent and human, the external and the internal.
+topology is an interface for agent and human, the external and the internal.
 
-topology decouples structure from representation, allowing humans to see and agents to reason over the same system without using external database or attribute/tag construction.
+topology decouples structure from representation, allowing humans to see and agents to reason over the same system without an external database or attribute/tag construction.
 
-just file system and markdown files, and your great ideas.
+just filesystem and markdown files, and your great ideas.
 
 ## Background
 
-the coding pradigm has been shifted from playful vibe coding to structured agent coding really fast, and the agent seems to be handle really decent and complex job in a fast evolving speed.
+The coding paradigm has rapidly shifted from playful, exploratory coding to structured, agent-driven development. Agents now handle increasingly complex tasks at an accelerating pace.
 
-but the Human-Machine-Interface hasn't really change much:
+However, the Human-Machine Interface has not evolved much:
 
 ```mermaid
 graph LR
@@ -24,41 +24,59 @@ graph LR
     Output -->|Reviews| Human
 ```
 
-it works but the each inputs are discrete and the agents need to find the context from scratch everytime.
+it works, but each input is discrete and agents need to find context from scratch every time.
 
-is there a new interface that let us adapts to this change? what is the best practice to leverage the agents to help us do the coding work while we can have better observability and feedback adjusted loop?
+is there a new interface that lets us adapt to this change? what is the best practice to leverage agents for coding work while maintaining better observability and a tighter feedback loop?
 
-What if, there is map for Agents, and a cli tool for agents to view the map, and a web ui for human to directly edit the map?
+What if there is a map for agents, a CLI tool for agents to view the map, and a web UI for humans to directly edit the map?
 
-that's what topology is, an interface between human and agents, a cli tool, a skill, a development task map system.
+that's what topology is — an interface between human and agents, a CLI tool, a skill, a development task map system.
 
 ## Core idea
 
 For Agents:
 
-the topology is a skill that tells agent to use `topology cli` while not use crude `grep`/`find` to archive high accuracy and token save.
+- topology is a skill that tells agents to use `topology` CLI instead of crude `grep`/`find`, achieving higher accuracy with lower token usage.
 
-topology projects heterogeneous file structures into a unified graph — a multi-dimensional DAG that goes beyond what `tree` or `grep` can express.
+- topology projects heterogeneous file structures into a unified graph — a multi-dimensional DAG that goes beyond what `tree` or `grep` can express.
 
-it's specifically designed for demonstrate the ROADMAP.md tasks list and its related context, while also works for file system and other markdown files, more format will be supported in the future.
+- it's designed to surface ROADMAP.md task lists and their related context, while also working for filesystem and other markdown files. More formats will be supported in the future.
 
 For Human:
 
+- the initial scan builds a graph from:
+
+  - filesystem structure
+  - parsed Markdown
+
+  this graph is the shared interface.
+
+- for continuous update and observability, agent CLI usage will trigger an API hook via topology watchdog, reflecting the agent's view for evaluation and the updated changes for task tracking.
+
+- all topology results can be parsed and rendered in a web UI frontend, and the frontend can directly edit files in the filesystem.
+
 ## Key features
 
-* topology reads/parses your files as they are. it extracts from the file from the formatting structure that's already there. no atrributes or database system needed.
+- Zero configuration — reads your files as they are. Extracts structure from formatting that's already there. No attributes or database needed.
+- Short ID aliases — every node gets a 7-char hash (`a3f2b1c`). Type short hashes or unique prefixes instead of full IDs.
+- Layered resolution — IDs resolve through exact match → short hash → unique prefix, with clear errors on ambiguity.
+- Graph query — filter by type, status, label; traverse children, descendants, ancestors, references, sequence.
+- Multiple output formats — `--format=json|compact|ids|tree` and `--count` for agent-friendly output.
+- Task context — `topology context <task>` returns goal, acceptance criteria, related files in one call.
+- Diff — `topology diff` compares current scan against cached graph, showing added/removed/changed nodes and edges.
+- Write-back — `topology update <ID> status=done` modifies the source markdown directly.
 
 ## Edge dimensions
 
 Every edge type is derived from existing filesystem and markdown conventions. No proprietary syntax.
 
-**Contains** — hierarchy from filesystem nesting and markdown heading/list structure. A directory contains files; a heading contains subheadings and tasks. Already implemented.
+**Contains** — hierarchy from filesystem nesting and markdown heading/list structure. A directory contains files; a heading contains subheadings and tasks.
 
 **References** — extracted from standard markdown links. `[query design](roadmap/query.md)` creates an edge from the containing node to the target file. Inline code paths like `` `src/scan/mod.rs` `` are matched against known filesystem nodes. Cross-file and within-file (`#anchor`) references are both captured. This is the edge that turns the tree into a graph.
 
 **Sequence** — implicit ordering from markdown lists. Item 2 follows item 1. Sibling tasks under the same heading have a natural order. No syntax needed — document structure is the signal.
 
-**Mentions** — when a markdown section names another heading, task, or file path in its body text without a formal link. Weaker than a reference, but still a signal. Detected by matching text fragments against known node labels and IDs.
+**Mentions** (planned) — when a markdown section names another heading, task, or file path in its body text without a formal link. Weaker than a reference, but still a signal.
 
 ## What topology reads
 
@@ -66,51 +84,61 @@ Topology currently operates on two sources, both using standard formats:
 
 **Filesystem**:
 
-* directories and files become nodes.
-* Parent-child nesting becomes `Contains` edges.
-* Respects `.gitignore`. No configuration needed.
+- directories and files become nodes.
+- Parent-child nesting becomes `Contains` edges.
+- Respects `.gitignore`. No configuration needed.
 
 **Markdown**:
 
-* headings become section nodes.
-* Task lists (`- [ ]` / `- [x]`) become task nodes with status metadata.
-* Heading hierarchy becomes `Contains` edges.
-* Links and inline paths become additional edge dimensions.
+- headings become section nodes.
+- Task lists (`- [ ]` / `- [x]`) become task nodes with status metadata.
+- Heading hierarchy becomes `Contains` edges.
+- Links and inline paths become additional edge dimensions.
 
 Future scanners can extend this to other formats (YAML, TOML, code ASTs) following the same principle: read what's there, don't require what isn't.
 
-## Queries this enables
+## CLI usage
+
+See [REFERENCE.md](.agents/skills/topology/REFERENCE.md) for full details.
 
 ```bash
-# What files does this task reference?
-topology query --references "ROADMAP.md#query"
+# scan
+topology scan .                              # full graph (filesystem + markdown)
+topology scan . --layer=markdown             # markdown layer only
 
-# What tasks mention this source file?
-topology query --mentions "src/scan/mod.rs"
+# query
+topology query -f type=task -f status=todo   # filter by type and metadata
+topology query -f "label~scan"               # label contains keyword
+topology query --roots                       # top-level entry points
+topology query --descendants "ROADMAP.md#stage-1"   # prefix resolves automatically
+topology query --children a3f2b1c            # use short hash
+topology query --format=compact -f type=task # compact output: [short] id  label
+topology query --format=tree                 # indented hierarchy view
+topology query --count -f type=task          # just the count
+topology query --status                      # roadmap progress summary
 
-# What's the next unfinished task in sequence?
-topology query type=task status=todo --first-in-sequence
+# context
+topology context scan                        # goal, criteria, related files for a task
 
-# Root nodes — entry points with no incoming edges
-topology query --roots
+# update
+topology update a3f2b1c status=done          # mark task done by short hash
+topology update "ROADMAP.md#some-task" status=todo   # or by full/prefix ID
+
+# diff
+topology diff .                              # compare current vs cached graph
 ```
 
-## Current CLI
+## Install
 
 ```bash
-topology scan .                        # full graph (filesystem + markdown)
-topology scan . --layer=markdown       # markdown layer only
-topology query type=task status=todo   # filter by type and metadata
-topology query --roots                 # top-level entry points
-topology query --descendants "ROADMAP.md#stage-1-agent-interface"
-topology query "label~scan"            # label contains keyword
-topology status                        # roadmap progress summary
-topology context scan                  # load task context
+cargo install --path .
 ```
 
-### Inspired By
+Requires Rust toolchain. The binary is installed to `~/.cargo/bin/topology`.
 
-* [OpenAI symphony](https://github.com/openai/symphony/tree/main): spec driven development(sdd) development orchestration
-* [spec-kit](https://github.com/github/spec-kit): sdd workflow
-* [Blog: A sufficiently detailed spec is code](https://haskellforall.com/2026/03/a-sufficiently-detailed-spec-is-code): thoughtful critic on sdd
-* [QMD](https://github.com/tobi/qmd): semantic search for subsequently powering the topology cli
+## Inspired by
+
+- [OpenAI symphony](https://github.com/openai/symphony/tree/main): spec driven development(sdd) development orchestration
+- [spec-kit](https://github.com/github/spec-kit): sdd workflow
+- [Blog: A sufficiently detailed spec is code](https://haskellforall.com/2026/03/a-sufficiently-detailed-spec-is-code): thoughtful critic on sdd
+- [QMD](https://github.com/tobi/qmd): semantic search for subsequently powering the topology cli
