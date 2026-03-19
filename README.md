@@ -14,14 +14,13 @@ However, the Human-Machine Interface has not evolved much:
 
 ```mermaid
 graph LR
-    Human[Human]
-    Agent[Agent]
-    Code[Codebase]
-    Output[Output]
-    Human -->|Input| Agent
-    Agent -->|Reads| Code
-    Agent -->|Produces| Output
-    Output -->|Reviews| Human
+    %% Old Interface (stateless loop)
+    subgraph Old
+        Human1[Human] -->|input| Agent1[Agent]
+        Agent1 -->|search / reconstruct context| Code1[Codebase]
+        Agent1 -->|produce| Output1[Output]
+        Output1 -->|review| Human1
+    end
 ```
 
 it works, but each input is discrete and agents need to find context from scratch every time.
@@ -31,6 +30,29 @@ is there a new interface that lets us adapt to this change? what is the best pra
 What if there is a map for agents, a CLI tool for agents to view the map, and a web UI for humans to directly edit the map?
 
 that's what topology is — an interface between human and agents, a CLI tool, a skill, a development task map system.
+
+```mermaid
+graph LR
+    %% New Interface (topology as shared state)
+    subgraph New
+        Human2[Human]
+        Agent2[Agent]
+        Topology[Topology]
+        Code2[Codebase]
+        Output2[Output]
+
+        %% shared interface
+        Human2 -->|observe / edit| Topology
+        Agent2 -->|query / update| Topology
+
+        %% topology connects real artifacts
+        Topology -->|maps / links| Code2
+        Topology -->|tracks / relates| Output2
+
+        %% execution still happens
+        Agent2 -->|produce| Output2
+    end
+```
 
 ## Core idea
 
