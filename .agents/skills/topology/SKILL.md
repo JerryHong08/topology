@@ -65,6 +65,8 @@ topo scan .                            # refresh graph (when cache stale)
 
 When the user proposes a new task, decide if it needs discussion:
 
+**Quick capture** — add to an inbox section (Open Issues, Design Concerns, etc.) without numeric ID. Good for ideas not yet ready for work.
+
 **Simple task** — add directly to ROADMAP.md with next available numeric ID.
 
 **Complex task** (architecture decision, multiple approaches, unclear scope):
@@ -77,6 +79,14 @@ When the user proposes a new task, decide if it needs discussion:
 2. Discuss with the user, fill in the doc
 3. Add task to ROADMAP.md with numeric ID, link the detail doc
 4. `topo scan .` to refresh
+
+### Inbox workflow
+
+Tasks in inbox sections (Open Issues, Design Concerns, etc.) have no numeric IDs and cannot be updated via `topo update`. When ready to work on an inbox item:
+
+1. Move it to the appropriate numbered section
+2. Assign the next available numeric ID
+3. Now it can be tracked: `topo update <ID> status=in-progress`
 
 ### Task IDs
 

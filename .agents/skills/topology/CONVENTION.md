@@ -52,7 +52,7 @@ Sections are defined by the agent during bootstrap based on project structure. D
 - When human proposes new work, agent decides which section it belongs to and assigns the ID
 - Once assigned, numbers never change — deleted sections don't get their numbers reused
 
-### Inbox
+### Inbox (non-numeric sections)
 
 Unnumbered headings after numbered sections collect unprocessed items:
 
@@ -65,7 +65,13 @@ Unnumbered headings after numbered sections collect unprocessed items:
 - Inbox headings have no numeric prefix
 - Tasks in inbox sections don't get numeric IDs either
 - **No number = unprocessed** — this is a signal by itself
-- Agent periodically triages inbox: clear items → move to numbered section with ID; decided items → mark `[~]` dropped
+
+**Inbox workflow:**
+1. **Capture** — quickly jot ideas/issues in any inbox section (no numeric ID needed)
+2. **Triage** — when ready to work on it, move to a numbered section and assign an ID
+3. **Track** — now it can be updated via `topo update <ID> status=...`
+
+Only tasks in numbered sections have stable IDs. Inbox tasks must be promoted before they can be tracked via CLI.
 
 ## Numeric task IDs
 
