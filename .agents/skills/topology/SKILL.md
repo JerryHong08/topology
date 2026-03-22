@@ -9,7 +9,30 @@ description: Navigate project roadmaps and track task progress. Use when working
 
 Use the `topo` command to navigate the project roadmap and track task progress.
 
+
 ### Init (first time)
+
+if you're first running this project and use `topo` to help you track the task, you need to check if `topo` is installed and working:
+
+```bash
+topo -V
+```
+
+if not, install it with:
+
+```bash
+curl -sSL https://github.com/JerryHong08/topology/releases/download/v1.0.0/topo-linux-x86_64 -o ~/.local/bin/topo && chmod +x ~/.local/bin/topo
+```
+
+Or build from source:
+
+```bash
+git clone https://github.com/JerryHong08/topology.git
+cd topology
+cargo install --path .
+```
+
+after that, you need to initialize the task roadmap if it doesn't exist:
 
 If the project has no `ROADMAP.md`, initialize one:
 
