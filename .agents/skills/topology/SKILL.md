@@ -1,71 +1,76 @@
 ---
 name: topology
-description: Scan directories and build a graph representation of the filesystem. Use when working with filesystem structures and roadmap or when the user mentions next to do, progress, plans, directories, files, or filesystem graphs.
+description: Navigate project roadmaps and track task progress. Use when working with roadmaps, task tracking, or when the user mentions next to do, progress, plans, or task status.
 ---
 
 # Topology
 
 ## Instructions
-When user ask you to test the topology skill, or you need to query the graph for roadmap progress, next tasks, or related files, use the `topology` command.
 
-The `topology` command has several subcommands:
-- `scan` to build the graph from the filesystem and markdown files
-- `query` to query the graph with various filters and options
-- `context` to load the context for a specific task
-- `update` to update the status or other attributes of a task
+Use the `topo` command to navigate the project roadmap and track task progress.
 
-always try to use the `topology` command while not `grep` or `find` etc. if you find topology doesn't fit your need, please write a feedback to the section in the ROADMAP.md to improve the skill.
+### Init (first time)
 
-topology is designed to be the go-to tool for understanding and navigating the structure of the project, especially when it comes to tracking progress and next steps in the roadmap. Whenever you need to find out what tasks are pending, what files are related to a task, or how different parts of the project are connected, `topology` should be your first choice. It provides a powerful and flexible way to query the project's structure and metadata, making it easier for you to make informed decisions and keep track of progress.
+If the project has no `ROADMAP.md`, initialize one:
 
-so, the workflow would be: 
+**Existing project with code:**
+1. Read key files to understand the project (README, config, entry points)
+2. Create `ROADMAP.md` with sections based on the project's architectural boundaries
+3. Populate with detected issues: bugs, missing tests, design improvements, TODOs in code
+4. Assign numeric IDs following convention
+5. `mkdir -p roadmap && topo scan .`
 
-if you're starting to work around with this project or returning to it after some time, run `topology scan` to build the graph from the current state of the filesystem and markdown files. This will give you an up-to-date map of the project.
+**New/empty project:**
+1. Ask the user what they want to build
+2. Create `ROADMAP.md` with sections reflecting the planned architecture
+3. Break the user's intent into numbered tasks and subtasks
+4. `mkdir -p roadmap && topo scan .`
 
-then after scanning the project with use `topology query` to find the next tasks, check their related files.
-
-after you find a task to work on, use `topology context <ID>` to load the context for that task, which will give you all the relevant information and files you need to do the work. The ID can be a short hash, a slug (e.g. `scan`, `stage-1`), or a full node ID — the resolver figures it out.
-
-and after a work done, try use 'topology update <ID> status=done' to update the task status, and check if the change is reflected in the roadmap and the query results.
-
-## Examples
-
-Typical Workflow:
-
-scan the project to build the graph:
+### Daily workflow
 
 ```bash
-topology scan .
+topo query -f status=todo              # find next tasks
+topo query --status                    # progress summary
+topo context <ID>                      # task details + linked docs
+topo update <ID> status=in-progress    # claim task
+topo update <ID> status=done           # complete task
+topo archive                           # clean up done/dropped
+topo scan .                            # refresh graph (when cache stale)
 ```
 
-query for next tasks:
+### Discussion (new task from user)
+
+When the user proposes a new task, decide if it needs discussion:
+
+**Simple task** — add directly to ROADMAP.md with next available numeric ID.
+
+**Complex task** (architecture decision, multiple approaches, unclear scope):
+1. Create `roadmap/<slug>.md` with discussion template:
+   - **Context**: why this task, current project state
+   - **Analysis**: related code, history (check ARCHIVE.md for similar dropped tasks), risks
+   - **Decision**: chosen approach and why
+   - **Rejected**: alternatives considered
+   - **Plan**: implementation steps
+2. Discuss with the user, fill in the doc
+3. Add task to ROADMAP.md with numeric ID, link the detail doc
+4. `topo scan .` to refresh
+
+### Task IDs
+
+Use numeric IDs (e.g. `1.1`, `2.3.1`) or slugs:
 
 ```bash
-topology query -f type=task -f status=todo --format tree
-```
-check related files for a task:
-
-```bash
-topology query --references "task-id"
-```
-load context for a task (slug, short hash, or full ID all work):
-
-```bash
-topology context scan
-topology context stage-1
-topology context d28e1f1
+topo context 1.3          # numeric ID (preferred)
+topo context scan         # slug
 ```
 
-load context as JSON:
+### Task statuses
 
-```bash
-topology context scan --json
-```
-update task status after completion:
+| Markdown | Status | Update command |
+|----------|--------|----------------|
+| `- [ ]` | todo | `status=todo` |
+| `- [x]` | done | `status=done` |
+| `- [-]` | in-progress | `status=in-progress` |
+| `- [~]` | dropped | `status=dropped` |
 
-```bash
-topology update "task-id" status=done
-```
-
-
-see more in [REFERENCE.md](./REFERENCE.md)
+See [convention](./CONVENTION.md) for full markdown writing rules.

@@ -7,33 +7,30 @@ mod scan;
 mod status;
 mod context;
 mod update;
+mod archive;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "topology", version, about = "Project file structures into a unified graph")]
+#[command(name = "topo", version, about = "Roadmap system — shared human-agent interface for task tracking")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
-
-    /// Show short hash IDs in output (hidden by default to save context)
-    #[arg(long, global = true)]
-    hash: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Scan a directory and output its topology as JSON
+    /// Scan a directory and build the topology graph
     Scan {
         /// Path to scan
         #[arg(default_value = ".")]
         path: PathBuf,
 
-        /// Filter output to a specific layer (e.g. "filesystem", "markdown")
+        /// Output full JSON to stdout (default: summary only)
         #[arg(long)]
-        layer: Option<String>,
+        json: bool,
     },
     /// Show task status summary from ROADMAP.md
     Status {
@@ -59,6 +56,10 @@ enum Commands {
         /// Path to scan
         #[arg(default_value = ".")]
         path: PathBuf,
+
+        /// Show summary statistics (like git diff --stat)
+        #[arg(long)]
+        stat: bool,
     },
     /// Update a node in its source markdown file
     Update {
@@ -72,6 +73,16 @@ enum Commands {
         #[arg(long, default_value = ".")]
         root: PathBuf,
     },
+    /// Archive done/dropped tasks from ROADMAP.md to ARCHIVE.md
+    Archive {
+        /// Project root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+
+        /// Preview what would be archived without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Query the topology graph with traversal and filters
     Query {
         /// Filter expressions (e.g. -f type=task -f status=todo -f "label~keyword")
@@ -83,7 +94,7 @@ enum Commands {
         path: PathBuf,
 
         /// Output format
-        #[arg(long, default_value = "json")]
+        #[arg(long, default_value = "tree")]
         format: output::OutputFormat,
 
         /// Print only the count of matching nodes
@@ -126,31 +137,41 @@ enum Commands {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let hash = cli.hash;
     match cli.command {
-        Commands::Scan { path, layer } => {
-            let graph = scan::run_all(&path, layer.as_deref())?;
+        Commands::Scan { path, json } => {
+            let graph = scan::run_all(&path)?;
             scan::write_cache_for(&path, &graph);
-            output::print_json(&graph, hash)?;
+            if json {
+                output::print_json(&graph)?;
+            } else {
+                println!("scanned: {} nodes, {} edges", graph.nodes.len(), graph.edges.len());
+            }
         }
         Commands::Status { roadmap } => {
-            status::run(&roadmap, hash)?;
+            status::run(&roadmap)?;
         }
         Commands::Context { id, root, json } => {
-            let graph = scan::run_cached(&root, None)?;
+            let graph = scan::run_cached(&root)?;
             let canonical = resolve::resolve(&graph, &id)?;
-            context::run(&canonical, &graph, &root, json, !hash)?;
+            context::run(&canonical, &graph, &root, json)?;
         }
-        Commands::Diff { path } => {
-            diff::run(&path)?;
+        Commands::Diff { path, stat } => {
+            if stat {
+                diff::run_stat(&path)?;
+            } else {
+                diff::run(&path)?;
+            }
         }
         Commands::Update { id, assignment, root } => {
-            let graph = scan::run_cached(&root, None)?;
+            let graph = scan::run_cached(&root)?;
             let canonical = resolve::resolve(&graph, &id)?;
             update::run(&canonical, &assignment, &root)?;
         }
+        Commands::Archive { root, dry_run } => {
+            archive::run(&root, dry_run)?;
+        }
         Commands::Query { filters, path, format, count, roots, children, descendants, ancestors, references, referenced_by, next, status: show_status } => {
-            let graph = scan::run_cached(&path, None)?;
+            let graph = scan::run_cached(&path)?;
 
             if show_status {
                 use std::collections::HashSet;
@@ -158,7 +179,7 @@ fn main() -> Result<()> {
                 roadmap.nodes.retain(|n| n.id.starts_with("ROADMAP.md"));
                 let valid: HashSet<&str> = roadmap.nodes.iter().map(|n| n.id.as_str()).collect();
                 roadmap.edges.retain(|e| valid.contains(e.source.as_str()) && valid.contains(e.target.as_str()));
-                let s = status::build(&roadmap, hash);
+                let s = status::build(&roadmap);
                 println!("{}", serde_json::to_string_pretty(&s)?);
                 return Ok(());
             }
@@ -192,7 +213,7 @@ fn main() -> Result<()> {
             if count {
                 output::print_count(&result);
             } else {
-                output::print_graph(&result, &format, hash)?;
+                output::print_graph(&result, &format)?;
             }
         }
     }

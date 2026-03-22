@@ -1,4 +1,3 @@
-pub mod directory;
 pub mod markdown;
 
 use anyhow::Result;
@@ -8,34 +7,21 @@ use std::time::SystemTime;
 
 use crate::graph::{Edge, EdgeKind, Graph};
 
-pub trait Scanner {
-    fn scan(&self, root: &Path) -> Result<Graph>;
-}
-
 const CACHE_FILE: &str = ".topology.json";
 
-pub fn run_all(root: &Path, layer: Option<&str>) -> Result<Graph> {
-    let mut graph = build_graph(root)?;
-
-    if let Some(filter) = layer {
-        graph.nodes.retain(|n| n.source == filter);
-        let valid_ids: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
-        graph.edges.retain(|e| valid_ids.contains(e.source.as_str()) && valid_ids.contains(e.target.as_str()));
-    }
-
-    Ok(graph)
+pub fn run_all(root: &Path) -> Result<Graph> {
+    build_graph(root)
 }
 
 fn build_graph(root: &Path) -> Result<Graph> {
     let mut graph = Graph::default();
     let mut links = Vec::new();
-    graph.add(directory::DirectoryScanner.scan(root)?);
     graph.add(markdown::MarkdownScanner.scan_with_links(root, &mut links)?);
     resolve_references(&mut graph, &links);
     Ok(graph)
 }
 
-pub fn run_cached(root: &Path, layer: Option<&str>) -> Result<Graph> {
+pub fn run_cached(root: &Path) -> Result<Graph> {
     let canon = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let cache_path = if canon.is_file() {
         canon.parent().unwrap_or(&canon).join(CACHE_FILE)
@@ -44,18 +30,12 @@ pub fn run_cached(root: &Path, layer: Option<&str>) -> Result<Graph> {
     };
 
     if let Some(graph) = read_cache_if_fresh(&cache_path, &canon) {
-        let mut graph = graph;
-        if let Some(filter) = layer {
-            graph.nodes.retain(|n| n.source == filter);
-            let valid_ids: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
-            graph.edges.retain(|e| valid_ids.contains(e.source.as_str()) && valid_ids.contains(e.target.as_str()));
-        }
         return Ok(graph);
     }
 
     let graph = build_graph(root)?;
     let _ = write_cache(&cache_path, &graph);
-    run_all(root, layer)
+    run_all(root)
 }
 
 pub fn write_cache_for(root: &Path, graph: &Graph) {
@@ -130,8 +110,19 @@ fn normalize_path(path: &str) -> String {
     parts.join("/")
 }
 
+/// Resolve a relative path through the filesystem to get the canonical relative path.
+/// This handles symlinks: `.claude/skills/foo.md` → `.agents/skills/foo.md`.
+fn resolve_real_path(rel_path: &str, root: &Path) -> Option<String> {
+    let abs = root.join(rel_path).canonicalize().ok()?;
+    let canon_root = root.canonicalize().ok()?;
+    let stripped = abs.strip_prefix(&canon_root).ok()?;
+    Some(stripped.to_string_lossy().replace('\\', "/"))
+}
+
 fn resolve_references(graph: &mut Graph, links: &[markdown::RawLink]) {
     let node_ids: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
+    // Derive root from first node's source file (best effort)
+    let root = std::env::current_dir().unwrap_or_default();
 
     for link in links {
         let url = link.target_url.as_str();
@@ -162,7 +153,12 @@ fn resolve_references(graph: &mut Graph, links: &[markdown::RawLink]) {
                 format!("{}/{}", source_dir, path_part)
             };
 
-            let normalized = normalize_path(&full_path);
+            let mut normalized = normalize_path(&full_path);
+
+            // Resolve symlinks to match scanner's canonical paths
+            if let Some(real) = resolve_real_path(&normalized, &root) {
+                normalized = real;
+            }
 
             match anchor_part {
                 Some(anchor) => format!("{}#{}", normalized, anchor),
@@ -170,10 +166,22 @@ fn resolve_references(graph: &mut Graph, links: &[markdown::RawLink]) {
             }
         };
 
-        if node_ids.contains(resolved.as_str()) {
+        let target = if node_ids.contains(resolved.as_str()) {
+            Some(resolved)
+        } else {
+            // File-level link (e.g. "roadmap/scan.md") — resolve to the first
+            // section node in that file by finding the shortest matching ID.
+            let prefix = format!("{}#", resolved);
+            graph.nodes.iter()
+                .filter(|n| n.id.starts_with(&prefix))
+                .min_by_key(|n| n.id.len())
+                .map(|n| n.id.clone())
+        };
+
+        if let Some(target) = target {
             graph.edges.push(Edge {
                 source: link.source_node.clone(),
-                target: resolved,
+                target,
                 kind: EdgeKind::References,
             });
         }

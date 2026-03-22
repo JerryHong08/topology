@@ -3,13 +3,10 @@ use serde::Serialize;
 use std::path::Path;
 
 use crate::graph::{EdgeKind, Graph, Node, NodeKind};
-use crate::resolve::short_hash;
 use crate::scan::markdown::slugify;
 
 #[derive(Serialize)]
 struct ContextJson {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    short: Option<String>,
     label: String,
     #[serde(rename = "type")]
     kind: String,
@@ -18,74 +15,59 @@ struct ContextJson {
     source: String,
     ancestors: Vec<AncestorJson>,
     children: Vec<ChildJson>,
-    references: Vec<RefJson>,
-    referenced_by: Vec<RefJson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    detail: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    links: Vec<LinkJson>,
+}
+
+#[derive(Serialize, Clone)]
+struct LinkJson {
+    path: String,
+    lines: usize,
+    tokens: usize,
 }
 
 #[derive(Serialize)]
 struct AncestorJson {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    short: Option<String>,
     label: String,
 }
 
 #[derive(Serialize)]
 struct ChildJson {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    short: Option<String>,
     label: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     status: Option<String>,
 }
 
-#[derive(Serialize)]
-struct RefJson {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    short: Option<String>,
-    label: String,
-}
-
-fn hash_if(id: &str, bare: bool) -> Option<String> {
-    if bare { None } else { Some(short_hash(id)) }
-}
-
-pub fn run(id: &str, graph: &Graph, root: &Path, json: bool, bare: bool) -> Result<()> {
+pub fn run(id: &str, graph: &Graph, root: &Path, json: bool) -> Result<()> {
     let node = graph.nodes.iter().find(|n| n.id == id)
         .expect("resolved ID must exist in graph");
 
     let anc = ancestors(id, graph);
     let kids = children(id, graph);
-    let refs = references(id, graph);
-    let ref_by = referenced_by(id, graph);
-    let detail_path = find_detail_path(id, graph, root);
+    let link_paths = find_link_paths(id, graph, root);
+    let links: Vec<LinkJson> = link_paths.iter().filter_map(|p| {
+        let content = std::fs::read_to_string(root.join(p)).ok()?;
+        Some(LinkJson {
+            path: p.clone(),
+            lines: content.lines().count(),
+            tokens: estimate_tokens(&content),
+        })
+    }).collect();
 
     if json {
         let ctx = ContextJson {
-            short: hash_if(id, bare),
             label: node.label.clone(),
             kind: format!("{:?}", node.kind).to_lowercase(),
             status: node_status(node).map(String::from),
             source: node.source.clone(),
             ancestors: anc.iter().map(|n| AncestorJson {
-                short: hash_if(&n.id, bare),
                 label: n.label.clone(),
             }).collect(),
             children: kids.iter().map(|n| ChildJson {
-                short: hash_if(&n.id, bare),
                 label: n.label.clone(),
                 status: node_status(n).map(String::from),
             }).collect(),
-            references: refs.iter().map(|n| RefJson {
-                short: hash_if(&n.id, bare),
-                label: n.label.clone(),
-            }).collect(),
-            referenced_by: ref_by.iter().map(|n| RefJson {
-                short: hash_if(&n.id, bare),
-                label: n.label.clone(),
-            }).collect(),
-            detail: detail_path.clone(),
+            links: links.clone(),
         };
         println!("{}", serde_json::to_string_pretty(&ctx)?);
         return Ok(());
@@ -94,23 +76,13 @@ pub fn run(id: &str, graph: &Graph, root: &Path, json: bool, bare: bool) -> Resu
     // Structured text output
     let status_str = node_status(node).unwrap_or("—");
     let kind_str = format!("{:?}", node.kind).to_lowercase();
-    if bare {
-        println!("# {} — {}", node.label, node.source);
-        println!("{} | {}", kind_str, status_str);
-    } else {
-        println!("# {} — {}", node.label, node.source);
-        println!("[{}] {} | {}", short_hash(id), kind_str, status_str);
-    }
+    println!("# {}", node.label);
+    println!("{} | {}", kind_str, status_str);
 
+    // Compact ancestor breadcrumb
     if !anc.is_empty() {
-        println!("\n## Ancestors");
-        for a in &anc {
-            if bare {
-                println!("  {}", a.label);
-            } else {
-                println!("  [{}] {}", short_hash(&a.id), a.label);
-            }
-        }
+        let breadcrumb: Vec<&str> = anc.iter().map(|n| n.label.as_str()).collect();
+        println!("{}", breadcrumb.join(" > "));
     }
 
     if !kids.is_empty() {
@@ -123,44 +95,18 @@ pub fn run(id: &str, graph: &Graph, root: &Path, json: bool, bare: bool) -> Resu
         for c in &kids {
             if c.kind == NodeKind::Task {
                 let mark = if node_status(c) == Some("done") { "x" } else { " " };
-                if bare {
-                    println!("- [{mark}] {}", c.label);
-                } else {
-                    println!("- [{mark}] [{}] {}", short_hash(&c.id), c.label);
-                }
-            } else if bare {
+                println!("- [{mark}] {}", c.label);
+            } else {
                 println!("  {}", c.label);
-            } else {
-                println!("  [{}] {}", short_hash(&c.id), c.label);
             }
         }
     }
 
-    if !refs.is_empty() {
-        println!("\n## References");
-        for r in &refs {
-            if bare {
-                println!("  {}", r.label);
-            } else {
-                println!("  [{}] {}", short_hash(&r.id), r.label);
-            }
+    if !links.is_empty() {
+        println!("\n## Links");
+        for l in &links {
+            println!("  {} ({} lines, ~{} tokens)", l.path, l.lines, l.tokens);
         }
-    }
-
-    if !ref_by.is_empty() {
-        println!("\n## Referenced by");
-        for r in &ref_by {
-            if bare {
-                println!("  {}", r.label);
-            } else {
-                println!("  [{}] {}", short_hash(&r.id), r.label);
-            }
-        }
-    }
-
-    if let Some(path) = &detail_path {
-        println!("\n## Detail");
-        println!("  {path}");
     }
 
     Ok(())
@@ -171,6 +117,31 @@ fn node_status(node: &Node) -> Option<&str> {
         .as_ref()
         .and_then(|m| m.get("status"))
         .and_then(|v| v.as_str())
+}
+
+/// Rough token estimate: ~1 token per 4 bytes for ASCII, CJK chars count individually.
+fn estimate_tokens(text: &str) -> usize {
+    let mut count = 0usize;
+    for word in text.split_whitespace() {
+        let cjk: usize = word.chars().filter(|c| is_cjk(*c)).count();
+        if cjk > 0 {
+            // CJK chars ≈ 1 token each, remaining ASCII ≈ 1 token per word
+            count += cjk + if word.chars().count() > cjk { 1 } else { 0 };
+        } else {
+            // English: ~1.3 tokens per word on average
+            count += 1;
+        }
+    }
+    count
+}
+
+fn is_cjk(c: char) -> bool {
+    matches!(c,
+        '\u{4E00}'..='\u{9FFF}' |   // CJK Unified
+        '\u{3400}'..='\u{4DBF}' |   // CJK Extension A
+        '\u{3000}'..='\u{303F}' |   // CJK Symbols
+        '\u{FF00}'..='\u{FFEF}'     // Fullwidth
+    )
 }
 
 /// Walk Contains edges upward to build ancestor chain (root first).
@@ -205,53 +176,43 @@ fn children<'a>(id: &str, graph: &'a Graph) -> Vec<&'a Node> {
         .collect()
 }
 
-/// Get outgoing Reference edges.
-fn references<'a>(id: &str, graph: &'a Graph) -> Vec<&'a Node> {
-    graph.edges.iter()
-        .filter(|e| e.kind == EdgeKind::References && e.source == id)
-        .filter_map(|e| graph.nodes.iter().find(|n| n.id == e.target))
-        .collect()
-}
+/// Find linked .md file paths: reference edges to .md files, plus convention fallback.
+fn find_link_paths(id: &str, graph: &Graph, root: &Path) -> Vec<String> {
+    let mut paths = Vec::new();
 
-/// Get incoming Reference edges.
-fn referenced_by<'a>(id: &str, graph: &'a Graph) -> Vec<&'a Node> {
-    graph.edges.iter()
-        .filter(|e| e.kind == EdgeKind::References && e.target == id)
-        .filter_map(|e| graph.nodes.iter().find(|n| n.id == e.source))
-        .collect()
-}
-
-/// Find detail doc path: first via Reference edges to roadmap/*.md, then convention fallback.
-/// Returns the relative path string, not the content.
-fn find_detail_path(id: &str, graph: &Graph, root: &Path) -> Option<String> {
-    // 1. Check outgoing Reference edges for roadmap/*.md targets
+    // 1. Outgoing Reference edges pointing to .md files
     for edge in graph.edges.iter() {
         if edge.kind == EdgeKind::References && edge.source == id {
             let target = &edge.target;
-            if target.starts_with("roadmap/") && target.ends_with(".md") {
-                if root.join(target.as_str()).exists() {
-                    return Some(target.clone());
+            let file_path = target.split_once('#').map(|(f, _)| f).unwrap_or(target);
+            if file_path.ends_with(".md") && root.join(file_path).exists() {
+                let s = file_path.to_string();
+                if !paths.contains(&s) {
+                    paths.push(s);
                 }
             }
         }
     }
 
-    // 2. Convention fallback: extract slug from ID after #
-    if let Some((_, slug)) = id.rsplit_once('#') {
-        let candidate = format!("roadmap/{slug}.md");
-        if root.join(&candidate).exists() {
-            return Some(candidate);
-        }
-        let slugified = slugify(slug);
-        if slugified != slug {
-            let candidate = format!("roadmap/{slugified}.md");
+    // 2. Convention fallback: roadmap/<slug>.md (only if no explicit links found)
+    if paths.is_empty() {
+        if let Some((_, slug)) = id.rsplit_once('#') {
+            let candidate = format!("roadmap/{slug}.md");
             if root.join(&candidate).exists() {
-                return Some(candidate);
+                paths.push(candidate);
+            } else {
+                let slugified = slugify(slug);
+                if slugified != slug {
+                    let candidate = format!("roadmap/{slugified}.md");
+                    if root.join(&candidate).exists() {
+                        paths.push(candidate);
+                    }
+                }
             }
         }
     }
 
-    None
+    paths
 }
 
 #[cfg(test)]
@@ -283,7 +244,7 @@ mod tests {
     fn ancestors_returns_chain_root_first() {
         let graph = Graph {
             nodes: vec![
-                make_node("root", NodeKind::File, "root"),
+                make_node("root", NodeKind::Section, "root"),
                 make_node("root#a", NodeKind::Section, "A"),
                 make_node("root#a#b", NodeKind::Section, "B"),
             ],
@@ -301,7 +262,7 @@ mod tests {
     #[test]
     fn ancestors_empty_for_root() {
         let graph = Graph {
-            nodes: vec![make_node("root", NodeKind::File, "root")],
+            nodes: vec![make_node("root", NodeKind::Section, "root")],
             edges: vec![],
         };
         assert!(ancestors("root", &graph).is_empty());
@@ -325,41 +286,43 @@ mod tests {
     }
 
     #[test]
-    fn references_and_referenced_by() {
-        let graph = Graph {
-            nodes: vec![
-                make_node("a", NodeKind::Task, "A"),
-                make_node("b", NodeKind::File, "B"),
-            ],
-            edges: vec![
-                Edge { source: "a".into(), target: "b".into(), kind: EdgeKind::References },
-            ],
-        };
-        assert_eq!(references("a", &graph).len(), 1);
-        assert_eq!(references("a", &graph)[0].id, "b");
-        assert_eq!(referenced_by("b", &graph).len(), 1);
-        assert_eq!(referenced_by("b", &graph)[0].id, "a");
-    }
-
-    #[test]
-    fn find_detail_path_returns_none_when_no_match() {
+    fn find_link_paths_returns_empty_when_no_match() {
         let graph = Graph { nodes: vec![], edges: vec![] };
-        let tmp = std::env::temp_dir().join("topo_ctx_test_none2");
+        let tmp = std::env::temp_dir().join("topo_ctx_test_none3");
         let _ = std::fs::create_dir_all(&tmp);
-        assert!(find_detail_path("foo#bar", &graph, &tmp).is_none());
+        assert!(find_link_paths("foo#bar", &graph, &tmp).is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]
-    fn find_detail_path_convention_fallback() {
-        let tmp = std::env::temp_dir().join("topo_ctx_test_conv2");
+    fn find_link_paths_convention_fallback() {
+        let tmp = std::env::temp_dir().join("topo_ctx_test_conv3");
         let roadmap_dir = tmp.join("roadmap");
         let _ = std::fs::create_dir_all(&roadmap_dir);
         std::fs::write(roadmap_dir.join("scan.md"), "# Scan detail").unwrap();
 
         let graph = Graph { nodes: vec![], edges: vec![] };
-        let path = find_detail_path("ROADMAP.md#scan", &graph, &tmp);
-        assert_eq!(path.unwrap(), "roadmap/scan.md");
+        let paths = find_link_paths("ROADMAP.md#scan", &graph, &tmp);
+        assert_eq!(paths, vec!["roadmap/scan.md"]);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn find_link_paths_from_reference_edges() {
+        let tmp = std::env::temp_dir().join("topo_ctx_test_refs");
+        let _ = std::fs::create_dir_all(tmp.join(".claude/skills"));
+        std::fs::write(tmp.join(".claude/skills/CONV.md"), "# Conv").unwrap();
+        std::fs::write(tmp.join("notes.md"), "# Notes").unwrap();
+
+        let graph = Graph {
+            nodes: vec![make_node("R.md#task", NodeKind::Task, "Task")],
+            edges: vec![
+                Edge { source: "R.md#task".into(), target: ".claude/skills/CONV.md#conv".into(), kind: EdgeKind::References },
+                Edge { source: "R.md#task".into(), target: "notes.md".into(), kind: EdgeKind::References },
+            ],
+        };
+        let paths = find_link_paths("R.md#task", &graph, &tmp);
+        assert_eq!(paths, vec![".claude/skills/CONV.md".to_string(), "notes.md".to_string()]);
         let _ = std::fs::remove_dir_all(&tmp);
     }
 }

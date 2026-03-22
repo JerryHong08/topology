@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use crate::graph::{Graph, NodeKind};
-use crate::scan::markdown::{make_id, parse_markdown, slugify};
+use crate::scan::markdown::{extract_numeric_id, make_id, parse_markdown, slugify};
 
 pub fn run(id: &str, assignment: &str, root: &Path) -> Result<()> {
     let (field, value) = assignment
@@ -13,8 +13,9 @@ pub fn run(id: &str, assignment: &str, root: &Path) -> Result<()> {
     if field != "status" {
         bail!("unsupported field '{}', only 'status' is supported", field);
     }
-    if value != "done" && value != "todo" {
-        bail!("unsupported value '{}', expected 'done' or 'todo'", value);
+    let valid = ["done", "todo", "in-progress", "dropped"];
+    if !valid.contains(&value) {
+        bail!("unsupported value '{}', expected one of: {}", value, valid.join(", "));
     }
 
     let (file_id, _slug) = id
@@ -43,13 +44,21 @@ pub fn run(id: &str, assignment: &str, root: &Path) -> Result<()> {
 
     for (i, line) in lines.iter().enumerate() {
         let trimmed = line.trim_start();
-        let is_checked = trimmed.starts_with("- [x] ") || trimmed.starts_with("- [X] ");
-        let is_unchecked = trimmed.starts_with("- [ ] ");
-        if !is_checked && !is_unchecked {
+        let is_task = trimmed.starts_with("- [x] ")
+            || trimmed.starts_with("- [X] ")
+            || trimmed.starts_with("- [ ] ")
+            || trimmed.starts_with("- [-] ")
+            || trimmed.starts_with("- [~] ");
+        if !is_task {
             continue;
         }
         let prefix_len = "- [x] ".len();
-        let label = trimmed[prefix_len..].trim();
+        let raw_label = trimmed[prefix_len..].trim();
+        // Strip numeric ID prefix to match how parser generates slugs
+        let label = match extract_numeric_id(raw_label) {
+            Some((_, rest)) => rest,
+            None => raw_label,
+        };
         let slug = slugify(label);
         let reconstructed_id = make_id(file_id, &slug, &mut slug_counts);
         if reconstructed_id == id {
@@ -62,12 +71,19 @@ pub fn run(id: &str, assignment: &str, root: &Path) -> Result<()> {
 
     let mut new_lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
     let line = &new_lines[line_idx];
-    let new_line = if value == "done" {
-        line.replacen("- [ ] ", "- [x] ", 1)
-    } else {
-        line.replacen("- [x] ", "- [ ] ", 1)
-            .replacen("- [X] ", "- [ ] ", 1)
+    let marker = match value {
+        "done" => "[x]",
+        "todo" => "[ ]",
+        "in-progress" => "[-]",
+        "dropped" => "[~]",
+        _ => bail!("unsupported value '{}'", value),
     };
+    let new_line = line
+        .replacen("- [ ] ", &format!("- {} ", marker), 1)
+        .replacen("- [x] ", &format!("- {} ", marker), 1)
+        .replacen("- [X] ", &format!("- {} ", marker), 1)
+        .replacen("- [-] ", &format!("- {} ", marker), 1)
+        .replacen("- [~] ", &format!("- {} ", marker), 1);
     new_lines[line_idx] = new_line;
 
     let mut output = new_lines.join("\n");
@@ -160,6 +176,48 @@ mod tests {
         write_md(&dir, "T.md", "# MySection\n- [ ] Alpha\n");
         let err = run("T.md#mysection", "status=done", &dir).unwrap_err();
         assert!(err.to_string().contains("not a task"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn task_with_numeric_id() {
+        let dir = temp_dir();
+        write_md(&dir, "T.md", "# S\n- [ ] 1.1 Scan project\n- [ ] 1.2 Query engine\n");
+        // The node ID is based on label without numeric prefix
+        run("T.md#scan-project", "status=done", &dir).unwrap();
+        let result = std::fs::read_to_string(dir.join("T.md")).unwrap();
+        assert!(result.contains("- [x] 1.1 Scan project"));
+        assert!(result.contains("- [ ] 1.2 Query engine"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_in_progress() {
+        let dir = temp_dir();
+        write_md(&dir, "T.md", "# S\n- [ ] Alpha\n");
+        run("T.md#alpha", "status=in-progress", &dir).unwrap();
+        let result = std::fs::read_to_string(dir.join("T.md")).unwrap();
+        assert!(result.contains("- [-] Alpha"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn set_dropped() {
+        let dir = temp_dir();
+        write_md(&dir, "T.md", "# S\n- [-] Alpha\n");
+        run("T.md#alpha", "status=dropped", &dir).unwrap();
+        let result = std::fs::read_to_string(dir.join("T.md")).unwrap();
+        assert!(result.contains("- [~] Alpha"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn dropped_to_todo() {
+        let dir = temp_dir();
+        write_md(&dir, "T.md", "# S\n- [~] Alpha\n");
+        run("T.md#alpha", "status=todo", &dir).unwrap();
+        let result = std::fs::read_to_string(dir.join("T.md")).unwrap();
+        assert!(result.contains("- [ ] Alpha"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
