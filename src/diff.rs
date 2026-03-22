@@ -1,3 +1,20 @@
+/// Print concise summary statistics for diff output (like git diff --stat)
+pub fn run_stat(root: &Path) -> Result<()> {
+    let before = scan::read_cache(root).unwrap_or_default();
+    let after = scan::run_all(root)?;
+    let output = compute(&before, &after);
+
+    let node_added = output.nodes.added.len();
+    let node_removed = output.nodes.removed.len();
+    let node_changed = output.nodes.changed.len();
+    let edge_added = output.edges.added.len();
+    let edge_removed = output.edges.removed.len();
+
+    println!("Diff Summary:");
+    println!("Nodes: +{} added, -{} removed, ~{} changed", node_added, node_removed, node_changed);
+    println!("Edges: +{} added, -{} removed", edge_added, edge_removed);
+    Ok(())
+}
 use anyhow::Result;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
@@ -45,7 +62,7 @@ fn edge_key(e: &Edge) -> EdgeKey {
 
 pub fn run(root: &Path) -> Result<()> {
     let before = scan::read_cache(root).unwrap_or_default();
-    let after = scan::run_all(root, None)?;
+    let after = scan::run_all(root)?;
 
     let output = compute(&before, &after);
 

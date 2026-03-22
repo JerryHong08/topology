@@ -47,8 +47,6 @@ impl Filter {
 
 fn kind_str(kind: &NodeKind) -> &'static str {
     match kind {
-        NodeKind::Directory => "directory",
-        NodeKind::File => "file",
         NodeKind::Section => "section",
         NodeKind::Task => "task",
     }
@@ -162,7 +160,6 @@ mod tests {
                 metadata: Some(serde_json::json!({"status": "todo"})) },
             Node { id: "grandchild".into(), kind: NodeKind::Task, source: "markdown".into(), label: "Sub task".into(),
                 metadata: Some(serde_json::json!({"status": "todo"})) },
-            Node { id: "file1".into(), kind: NodeKind::File, source: "filesystem".into(), label: "main.rs".into(), metadata: None },
         ];
         let edges = vec![
             Edge { source: "root".into(), target: "child1".into(), kind: EdgeKind::Contains },
@@ -220,8 +217,7 @@ mod tests {
         let result = execute(&g, &Traversal::Roots, &[]);
         let ids: HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
         assert!(ids.contains("root"));
-        assert!(ids.contains("file1"));
-        assert_eq!(ids.len(), 2);
+        assert_eq!(ids.len(), 1);
     }
 
     #[test]
@@ -271,7 +267,7 @@ mod tests {
     fn ref_graph() -> Graph {
         let nodes = vec![
             Node { id: "a".into(), kind: NodeKind::Section, source: "markdown".into(), label: "A".into(), metadata: None },
-            Node { id: "b".into(), kind: NodeKind::File, source: "filesystem".into(), label: "B".into(), metadata: None },
+            Node { id: "b".into(), kind: NodeKind::Section, source: "markdown".into(), label: "B".into(), metadata: None },
             Node { id: "c".into(), kind: NodeKind::Section, source: "markdown".into(), label: "C".into(), metadata: None },
         ];
         let edges = vec![
@@ -306,9 +302,8 @@ mod tests {
     #[test]
     fn references_with_filter() {
         let g = ref_graph();
-        let filters = vec![Filter::parse("type=file").unwrap()];
+        let filters = vec![Filter::parse("type=section").unwrap()];
         let result = execute(&g, &Traversal::References("a".into()), &filters);
-        assert_eq!(result.nodes.len(), 1);
-        assert_eq!(result.nodes[0].id, "b");
+        assert_eq!(result.nodes.len(), 2); // b and c are both sections
     }
 }

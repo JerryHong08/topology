@@ -2,43 +2,35 @@ use anyhow::{bail, Result};
 
 use crate::graph::Graph;
 
-const FNV_OFFSET: u32 = 2166136261;
-const FNV_PRIME: u32 = 16777619;
-const MASK_28: u32 = 0x0FFF_FFFF;
-
-/// FNV-1a hash → lower 28 bits → 7 hex chars.
-pub fn short_hash(id: &str) -> String {
-    let mut h = FNV_OFFSET;
-    for b in id.bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(FNV_PRIME);
-    }
-    format!("{:07x}", h & MASK_28)
-}
-
 /// Resolve a user-provided input to a canonical node ID.
 ///
-/// Priority: exact match → short hash match → unique prefix match.
+/// Priority: exact → numeric stable_id → ID prefix → slug exact → slug prefix.
 pub fn resolve(graph: &Graph, input: &str) -> Result<String> {
     // 1. Exact match
     if graph.nodes.iter().any(|n| n.id == input) {
         return Ok(input.to_string());
     }
 
-    // 2. Short hash match
-    let hash_matches: Vec<&str> = graph
+    // 2. Numeric stable_id match (e.g. "1.3" matches node with stable_id: "1.3")
+    let numeric_matches: Vec<&str> = graph
         .nodes
         .iter()
-        .filter(|n| short_hash(&n.id) == input)
+        .filter(|n| {
+            n.metadata
+                .as_ref()
+                .and_then(|m| m.get("stable_id"))
+                .and_then(|v| v.as_str())
+                == Some(input)
+        })
         .map(|n| n.id.as_str())
         .collect();
-    match hash_matches.len() {
-        1 => return Ok(hash_matches[0].to_string()),
+    match numeric_matches.len() {
+        1 => return Ok(numeric_matches[0].to_string()),
         n if n > 1 => bail!(
-            "ambiguous short hash '{}', matches {} nodes:\n  {}",
+            "ambiguous numeric ID '{}', matches {} nodes:\n  {}",
             input,
             n,
-            hash_matches.join("\n  ")
+            numeric_matches.join("\n  ")
         ),
         _ => {}
     }
@@ -128,33 +120,9 @@ mod tests {
     }
 
     #[test]
-    fn hash_deterministic() {
-        let a = short_hash("ROADMAP.md#some-task");
-        let b = short_hash("ROADMAP.md#some-task");
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn hash_7_hex_chars() {
-        let h = short_hash("anything");
-        assert_eq!(h.len(), 7);
-        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
     fn resolve_exact_match() {
         let g = make_graph(&["foo#bar", "foo#baz"]);
         assert_eq!(resolve(&g, "foo#bar").unwrap(), "foo#bar");
-    }
-
-    #[test]
-    fn resolve_short_hash() {
-        let g = make_graph(&["ROADMAP.md#some-long-task-id"]);
-        let h = short_hash("ROADMAP.md#some-long-task-id");
-        assert_eq!(
-            resolve(&g, &h).unwrap(),
-            "ROADMAP.md#some-long-task-id"
-        );
     }
 
     #[test]
@@ -205,6 +173,47 @@ mod tests {
             resolve(&g, "stage-1").unwrap(),
             "ROADMAP.md#stage-1-graph-foundation"
         );
+    }
+
+    fn make_graph_with_stable_ids(entries: &[(&str, Option<&str>)]) -> Graph {
+        let nodes = entries
+            .iter()
+            .map(|(id, stable_id)| Node {
+                id: id.to_string(),
+                kind: NodeKind::Task,
+                source: "test".into(),
+                label: id.to_string(),
+                metadata: stable_id.map(|sid| serde_json::json!({"stable_id": sid})),
+            })
+            .collect();
+        Graph {
+            nodes,
+            edges: vec![],
+        }
+    }
+
+    #[test]
+    fn resolve_numeric_id() {
+        let g = make_graph_with_stable_ids(&[
+            ("ROADMAP.md#scan-project-files", Some("1.1")),
+            ("ROADMAP.md#stable-id", Some("1.3")),
+        ]);
+        assert_eq!(
+            resolve(&g, "1.1").unwrap(),
+            "ROADMAP.md#scan-project-files"
+        );
+        assert_eq!(resolve(&g, "1.3").unwrap(), "ROADMAP.md#stable-id");
+    }
+
+    #[test]
+    fn resolve_numeric_id_nested() {
+        let g = make_graph_with_stable_ids(&[
+            ("ROADMAP.md#parent", Some("1.1")),
+            ("ROADMAP.md#child", Some("1.1.1")),
+        ]);
+        // "1.1" should match exactly, not prefix-match to "1.1.1"
+        assert_eq!(resolve(&g, "1.1").unwrap(), "ROADMAP.md#parent");
+        assert_eq!(resolve(&g, "1.1.1").unwrap(), "ROADMAP.md#child");
     }
 
     #[test]

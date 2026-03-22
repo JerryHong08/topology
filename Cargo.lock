@@ -352,7 +352,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "topology"
+name = "topo"
 version = "0.1.0"
 dependencies = [
  "anyhow",

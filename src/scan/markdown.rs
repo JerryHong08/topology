@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use super::Scanner;
 use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
 
 pub struct MarkdownScanner;
@@ -13,13 +12,6 @@ pub struct RawLink {
     pub source_node: String,
     pub target_url: String,
     pub source_file: String,
-}
-
-impl Scanner for MarkdownScanner {
-    fn scan(&self, root: &Path) -> Result<Graph> {
-        let mut links = Vec::new();
-        self.scan_with_links(root, &mut links)
-    }
 }
 
 impl MarkdownScanner {
@@ -88,10 +80,59 @@ fn heading_level_num(level: HeadingLevel) -> u8 {
 }
 
 struct PendingTask {
-    checked: bool,
+    status: &'static str, // "todo", "done", "in-progress", "dropped"
     text: String,
     list_depth: usize,
     id: Option<String>,
+    deferred_links: Vec<(String, String)>, // (target_url, source_file)
+}
+
+/// Extract a numeric task ID prefix like "1.1" or "1.1.1" from the start of a label.
+/// Returns (numeric_id, remaining_label) if found.
+pub fn extract_numeric_id(text: &str) -> Option<(&str, &str)> {
+    let bytes = text.as_bytes();
+    if bytes.is_empty() || !bytes[0].is_ascii_digit() {
+        return None;
+    }
+    // Match pattern: digits followed by (.digits)+ then whitespace
+    let mut i = 0;
+    let mut dot_count = 0;
+    while i < bytes.len() {
+        if bytes[i].is_ascii_digit() {
+            i += 1;
+        } else if bytes[i] == b'.' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_digit() {
+            dot_count += 1;
+            i += 1;
+        } else {
+            break;
+        }
+    }
+    // Must have at least one dot (e.g. "1.1", not just "1")
+    if dot_count == 0 {
+        return None;
+    }
+    // Must be followed by whitespace
+    if i >= bytes.len() || !bytes[i].is_ascii_whitespace() {
+        return None;
+    }
+    let numeric_id = &text[..i];
+    let rest = text[i..].trim_start();
+    Some((numeric_id, rest))
+}
+
+/// Check if a list item starts with a custom task marker like `[-]` or `[~]`.
+/// pulldown_cmark only recognizes `[ ]` and `[x]`, so we detect these manually.
+/// Returns (marker_char, remaining_text) if found.
+fn extract_custom_marker(text: &str) -> Option<(char, &str)> {
+    let text = text.trim_start();
+    if text.len() >= 3 && text.as_bytes()[0] == b'[' && text.as_bytes()[2] == b']' {
+        let marker = text.as_bytes()[1] as char;
+        if marker == '-' || marker == '~' {
+            let rest = text[3..].trim_start();
+            return Some((marker, rest));
+        }
+    }
+    None
 }
 
 pub(crate) fn make_id(file_id: &str, slug: &str, slug_counts: &mut HashMap<String, usize>) -> String {
@@ -129,6 +170,10 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
     let mut current_heading_level: u8 = 0;
     let mut heading_text = String::new();
     let mut in_code_block = false;
+    let mut in_list_item = false;
+    let mut is_task_item = false; // true if TaskListMarker was seen for this item
+    let mut plain_item_text = String::new(); // accumulates text for non-task list items
+    let mut item_links: Vec<(String, String)> = Vec::new(); // deferred links for current list item
 
     for event in parser {
         match event {
@@ -184,20 +229,36 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
             Event::End(TagEnd::List(_)) => {
                 list_depth -= 1;
             }
+            Event::Start(Tag::Item) => {
+                in_list_item = true;
+                is_task_item = false;
+                plain_item_text.clear();
+                item_links.clear();
+            }
             Event::TaskListMarker(checked) => {
+                is_task_item = true;
                 task_stack.push(PendingTask {
-                    checked,
+                    status: if checked { "done" } else { "todo" },
                     text: String::new(),
                     list_depth,
                     id: None,
+                    deferred_links: Vec::new(),
                 });
             }
             Event::End(TagEnd::Item)
                 if !task_stack.is_empty()
                     && task_stack.last().unwrap().list_depth == list_depth =>
             {
+                in_list_item = false;
                 let mut task = task_stack.pop().unwrap();
-                let label = task.text.trim().to_string();
+                let raw_label = task.text.trim().to_string();
+
+                // Extract numeric ID prefix if present (e.g. "1.1 Scan..." → id="1.1", label="Scan...")
+                let (stable_id, label) = match extract_numeric_id(&raw_label) {
+                    Some((nid, rest)) => (Some(nid.to_string()), rest.to_string()),
+                    None => (None, raw_label),
+                };
+
                 let slug = slugify(&label);
 
                 let task_id = task
@@ -205,7 +266,7 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                     .take()
                     .unwrap_or_else(|| make_id(file_id, &slug, &mut slug_counts));
 
-                let status = if task.checked { "done" } else { "todo" };
+                let status = task.status;
 
                 let parent_id = if let Some(parent) = task_stack.last_mut() {
                     if parent.id.is_none() {
@@ -220,12 +281,17 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                         .unwrap_or_else(|| file_id.to_string())
                 };
 
+                let mut meta = serde_json::json!({"status": status});
+                if let Some(ref sid) = stable_id {
+                    meta["stable_id"] = serde_json::json!(sid);
+                }
+
                 graph.nodes.push(Node {
                     id: task_id.clone(),
                     kind: NodeKind::Task,
                     source: "markdown".into(),
                     label,
-                    metadata: Some(serde_json::json!({"status": status})),
+                    metadata: Some(meta),
                 });
                 graph.edges.push(Edge {
                     source: parent_id.clone(),
@@ -240,13 +306,32 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                         kind: EdgeKind::Sequence,
                     });
                 }
-                last_sibling.insert(parent_id, task_id);
+                last_sibling.insert(parent_id, task_id.clone());
+
+                // Drain deferred links from both the task and item_links
+                for (target_url, source_file) in task.deferred_links.drain(..) {
+                    links.push(RawLink {
+                        source_node: task_id.clone(),
+                        target_url,
+                        source_file,
+                    });
+                }
+                for (target_url, source_file) in item_links.drain(..) {
+                    links.push(RawLink {
+                        source_node: task_id.clone(),
+                        target_url,
+                        source_file,
+                    });
+                }
             }
             Event::Text(text) => {
                 if in_heading {
                     heading_text.push_str(&text);
                 } else if !in_code_block {
-                    if let Some(top) = task_stack.last_mut() {
+                    if in_list_item && !is_task_item {
+                        // Accumulate text for potential custom marker detection
+                        plain_item_text.push_str(&text);
+                    } else if let Some(top) = task_stack.last_mut() {
                         if list_depth == top.list_depth {
                             top.text.push_str(&text);
                         }
@@ -263,15 +348,23 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                         }
                     }
                     if looks_like_path(&code) {
-                        let source_node = heading_stack
-                            .last()
-                            .map(|(_, id)| id.clone())
-                            .unwrap_or_else(|| file_id.to_string());
-                        links.push(RawLink {
-                            source_node,
-                            target_url: code.to_string(),
-                            source_file: file_id.to_string(),
-                        });
+                        if in_list_item {
+                            if let Some(top) = task_stack.last_mut().filter(|t| t.list_depth == list_depth) {
+                                top.deferred_links.push((code.to_string(), file_id.to_string()));
+                            } else {
+                                item_links.push((code.to_string(), file_id.to_string()));
+                            }
+                        } else {
+                            let source_node = heading_stack
+                                .last()
+                                .map(|(_, id)| id.clone())
+                                .unwrap_or_else(|| file_id.to_string());
+                            links.push(RawLink {
+                                source_node,
+                                target_url: code.to_string(),
+                                source_file: file_id.to_string(),
+                            });
+                        }
                     }
                 }
             }
@@ -283,16 +376,85 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 if !in_code_block {
-                    let source_node = heading_stack
-                        .last()
-                        .map(|(_, id)| id.clone())
-                        .unwrap_or_else(|| file_id.to_string());
-                    links.push(RawLink {
-                        source_node,
-                        target_url: dest_url.to_string(),
-                        source_file: file_id.to_string(),
-                    });
+                    if in_list_item {
+                        if let Some(top) = task_stack.last_mut().filter(|t| t.list_depth == list_depth) {
+                            top.deferred_links.push((dest_url.to_string(), file_id.to_string()));
+                        } else {
+                            item_links.push((dest_url.to_string(), file_id.to_string()));
+                        }
+                    } else {
+                        let source_node = heading_stack
+                            .last()
+                            .map(|(_, id)| id.clone())
+                            .unwrap_or_else(|| file_id.to_string());
+                        links.push(RawLink {
+                            source_node,
+                            target_url: dest_url.to_string(),
+                            source_file: file_id.to_string(),
+                        });
+                    }
                 }
+            }
+            Event::End(TagEnd::Item) => {
+                // Check if this non-task list item has a custom marker [-] or [~]
+                if in_list_item && !is_task_item && !plain_item_text.is_empty() {
+                    if let Some((marker, rest)) = extract_custom_marker(&plain_item_text) {
+                        let status = match marker {
+                            '-' => "in-progress",
+                            '~' => "dropped",
+                            _ => unreachable!(),
+                        };
+                        let raw_label = rest.to_string();
+                        let (stable_id, label) = match extract_numeric_id(&raw_label) {
+                            Some((nid, remainder)) => (Some(nid.to_string()), remainder.to_string()),
+                            None => (None, raw_label),
+                        };
+                        let slug = slugify(&label);
+                        let task_id = make_id(file_id, &slug, &mut slug_counts);
+
+                        let parent_id = heading_stack
+                            .last()
+                            .map(|(_, id)| id.clone())
+                            .unwrap_or_else(|| file_id.to_string());
+
+                        let mut meta = serde_json::json!({"status": status});
+                        if let Some(ref sid) = stable_id {
+                            meta["stable_id"] = serde_json::json!(sid);
+                        }
+
+                        graph.nodes.push(Node {
+                            id: task_id.clone(),
+                            kind: NodeKind::Task,
+                            source: "markdown".into(),
+                            label,
+                            metadata: Some(meta),
+                        });
+                        graph.edges.push(Edge {
+                            source: parent_id.clone(),
+                            target: task_id.clone(),
+                            kind: EdgeKind::Contains,
+                        });
+
+                        if let Some(prev) = last_sibling.get(&parent_id) {
+                            graph.edges.push(Edge {
+                                source: prev.clone(),
+                                target: task_id.clone(),
+                                kind: EdgeKind::Sequence,
+                            });
+                        }
+                        last_sibling.insert(parent_id, task_id.clone());
+
+                        // Drain deferred item links
+                        for (target_url, source_file) in item_links.drain(..) {
+                            links.push(RawLink {
+                                source_node: task_id.clone(),
+                                target_url,
+                                source_file,
+                            });
+                        }
+                    }
+                }
+                in_list_item = false;
             }
             _ => {}
         }
@@ -391,7 +553,8 @@ mod tests {
         drop(f);
 
         let scanner = MarkdownScanner;
-        let g = scanner.scan(&file).unwrap();
+        let mut links = Vec::new();
+        let g = scanner.scan_with_links(&file, &mut links).unwrap();
         assert!(g.nodes.iter().all(|n| n.id.starts_with("NOTE.md")));
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -403,6 +566,63 @@ mod tests {
         let tasks = node_ids(&g, NodeKind::Task);
         assert_eq!(tasks.len(), 1);
         assert_eq!(g.nodes.iter().find(|n| n.kind == NodeKind::Task).unwrap().label, "Real task");
+    }
+
+    #[test]
+    fn numeric_id_extraction() {
+        let g = parse("# S\n- [ ] 1.1 Scan project\n- [x] 1.2 Query done\n");
+        let tasks: Vec<_> = g.nodes.iter().filter(|n| n.kind == NodeKind::Task).collect();
+        assert_eq!(tasks.len(), 2);
+
+        // Labels should have numeric ID stripped
+        assert_eq!(tasks[0].label, "Scan project");
+        assert_eq!(tasks[1].label, "Query done");
+
+        // stable_id should be in metadata
+        assert_eq!(tasks[0].metadata.as_ref().unwrap()["stable_id"], "1.1");
+        assert_eq!(tasks[1].metadata.as_ref().unwrap()["stable_id"], "1.2");
+
+        // slug-based ID should derive from label without numeric prefix
+        assert_eq!(tasks[0].id, "test.md#scan-project");
+        assert_eq!(tasks[1].id, "test.md#query-done");
+    }
+
+    #[test]
+    fn numeric_id_nested() {
+        let g = parse("# S\n- [ ] 1.1 Parent\n  - [ ] 1.1.1 Child\n");
+        let tasks: Vec<_> = g.nodes.iter().filter(|n| n.kind == NodeKind::Task).collect();
+        // Child is emitted first (inner item closes before outer)
+        let child = tasks.iter().find(|t| t.label == "Child").unwrap();
+        let parent = tasks.iter().find(|t| t.label == "Parent").unwrap();
+        assert_eq!(child.metadata.as_ref().unwrap()["stable_id"], "1.1.1");
+        assert_eq!(parent.metadata.as_ref().unwrap()["stable_id"], "1.1");
+    }
+
+    #[test]
+    fn no_numeric_id_when_absent() {
+        let g = parse("# S\n- [ ] Just a normal task\n");
+        let task = g.nodes.iter().find(|n| n.kind == NodeKind::Task).unwrap();
+        assert_eq!(task.label, "Just a normal task");
+        assert!(task.metadata.as_ref().unwrap().get("stable_id").is_none());
+    }
+
+    #[test]
+    fn custom_marker_in_progress() {
+        let g = parse("# S\n- [-] 1.1 In progress task\n");
+        let tasks: Vec<_> = g.nodes.iter().filter(|n| n.kind == NodeKind::Task).collect();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].label, "In progress task");
+        assert_eq!(tasks[0].metadata.as_ref().unwrap()["status"], "in-progress");
+        assert_eq!(tasks[0].metadata.as_ref().unwrap()["stable_id"], "1.1");
+    }
+
+    #[test]
+    fn custom_marker_dropped() {
+        let g = parse("# S\n- [~] 2.1 Dropped task\n");
+        let tasks: Vec<_> = g.nodes.iter().filter(|n| n.kind == NodeKind::Task).collect();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].label, "Dropped task");
+        assert_eq!(tasks[0].metadata.as_ref().unwrap()["status"], "dropped");
     }
 
     #[test]
@@ -482,5 +702,32 @@ mod tests {
         assert!(seq.contains(&("test.md#a", "test.md#b")));
         assert!(seq.contains(&("test.md#a1", "test.md#a2")));
         assert_eq!(seq.len(), 2);
+    }
+
+    #[test]
+    fn task_link_source_is_task_node() {
+        let md = "# S\n- [ ] My task — see [details](roadmap/detail.md)\n";
+        let links = parse_links(md);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target_url, "roadmap/detail.md");
+        assert_eq!(links[0].source_node, "test.md#my-task-see-details");
+    }
+
+    #[test]
+    fn task_code_path_source_is_task_node() {
+        let md = "# S\n- [ ] Scan files — `src/scan/mod.rs`\n";
+        let links = parse_links(md);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target_url, "src/scan/mod.rs");
+        assert_eq!(links[0].source_node, "test.md#scan-files-src-scan-mod-rs");
+    }
+
+    #[test]
+    fn custom_marker_link_source_is_task_node() {
+        let md = "# S\n- [~] 3.7 Dropped — see [details](roadmap/detail.md)\n";
+        let links = parse_links(md);
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target_url, "roadmap/detail.md");
+        assert_eq!(links[0].source_node, "test.md#dropped-see-details");
     }
 }

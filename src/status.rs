@@ -5,7 +5,6 @@ use std::fs;
 use std::path::Path;
 
 use crate::graph::{EdgeKind, Graph, NodeKind};
-use crate::resolve::short_hash;
 use crate::scan::markdown::parse_markdown;
 
 #[derive(Serialize)]
@@ -26,8 +25,6 @@ pub struct Stage {
 
 #[derive(Serialize)]
 pub struct TaskSummary {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub short: Option<String>,
     pub id: String,
     pub label: String,
     pub status: String,
@@ -41,7 +38,7 @@ pub struct SubtaskCount {
     pub done: usize,
 }
 
-pub fn run(roadmap_path: &Path, hash: bool) -> Result<()> {
+pub fn run(roadmap_path: &Path) -> Result<()> {
     let content = fs::read_to_string(roadmap_path)
         .with_context(|| format!("cannot read {}", roadmap_path.display()))?;
     let file_id = roadmap_path
@@ -52,12 +49,12 @@ pub fn run(roadmap_path: &Path, hash: bool) -> Result<()> {
     let mut graph = Graph::default();
     parse_markdown(&file_id, &content, &mut graph, &mut Vec::new());
 
-    let output = build(&graph, hash);
+    let output = build(&graph);
     println!("{}", serde_json::to_string_pretty(&output)?);
     Ok(())
 }
 
-pub fn build(graph: &Graph, hash: bool) -> StatusOutput {
+pub fn build(graph: &Graph) -> StatusOutput {
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
     for edge in &graph.edges {
         if edge.kind == EdgeKind::Contains {
@@ -139,7 +136,6 @@ pub fn build(graph: &Graph, hash: bool) -> StatusOutput {
             };
 
             stage_tasks.push(TaskSummary {
-                short: if hash { Some(short_hash(child_id)) } else { None },
                 id: child_id.clone(),
                 label: child.label.clone(),
                 status,

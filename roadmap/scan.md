@@ -1,16 +1,14 @@
 # Scan
 
-Goal: project heterogeneous file structures into a unified graph representation (Topology) as JSON.
+Goal: parse markdown files into a graph representation (Topology) as JSON.
 
 ## Acceptance Criteria
-- `topology scan <path>` outputs graph JSON covering directory structures, markdown headings, and markdown task lists
-- Layer filter (`--layer`) isolates filesystem or markdown nodes
+- `topo scan <path>` outputs graph JSON covering markdown headings and task lists
 - Deterministic output for identical input
-- Handles nested directories and markdown files recursively
+- Handles nested markdown files recursively
 
 ## Related Files
-- src/scan/mod.rs — scanner trait and orchestration
-- src/scan/directory.rs — filesystem scanner
+- src/scan/mod.rs — scanner orchestration, caching, reference resolution
 - src/scan/markdown.rs — markdown heading + task parser
 - src/graph.rs — Node/Edge/Graph types
 
@@ -19,3 +17,4 @@ Goal: project heterogeneous file structures into a unified graph representation 
 - Uses `pulldown-cmark` for markdown parsing with task list extension
 - Slug-based IDs for headings and tasks, with dedup counters
 - Task hierarchy expressed via indented task lists in markdown
+- Numeric task ID extraction (e.g. "1.1 Scan..." → stable_id="1.1")

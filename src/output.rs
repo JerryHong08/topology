@@ -1,58 +1,36 @@
-use crate::graph::{EdgeKind, Graph};
-use crate::resolve::short_hash;
+use crate::graph::{EdgeKind, Graph, Node, NodeKind};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Default, clap::ValueEnum)]
 pub enum OutputFormat {
-    #[default]
     Json,
     Compact,
     Ids,
+    #[default]
     Tree,
 }
 
-pub fn print_json(graph: &Graph, hash: bool) -> anyhow::Result<()> {
-    let mut val = serde_json::to_value(graph)?;
-    if hash {
-        if let Some(nodes) = val.get_mut("nodes").and_then(|v| v.as_array_mut()) {
-            for node in nodes {
-                if let Some(id) = node.get("id").and_then(|v| v.as_str()) {
-                    let short = short_hash(id);
-                    node.as_object_mut()
-                        .unwrap()
-                        .insert("short".into(), serde_json::Value::String(short));
-                }
-            }
-        }
-    }
-    println!("{}", serde_json::to_string_pretty(&val)?);
+pub fn print_json(graph: &Graph) -> anyhow::Result<()> {
+    println!("{}", serde_json::to_string_pretty(graph)?);
     Ok(())
 }
 
-pub fn print_graph(graph: &Graph, format: &OutputFormat, hash: bool) -> anyhow::Result<()> {
+pub fn print_graph(graph: &Graph, format: &OutputFormat) -> anyhow::Result<()> {
     match format {
-        OutputFormat::Json => print_json(graph, hash),
+        OutputFormat::Json => print_json(graph),
         OutputFormat::Compact => {
             for node in &graph.nodes {
-                if hash {
-                    println!("[{}] {}\t{}", short_hash(&node.id), node.id, node.label);
-                } else {
-                    println!("{}\t{}", node.id, node.label);
-                }
+                println!("{}\t{}", node.id, node.label);
             }
             Ok(())
         }
         OutputFormat::Ids => {
             for node in &graph.nodes {
-                if hash {
-                    println!("[{}] {}", short_hash(&node.id), node.id);
-                } else {
-                    println!("{}", node.id);
-                }
+                println!("{}", node.id);
             }
             Ok(())
         }
-        OutputFormat::Tree => print_tree(graph, hash),
+        OutputFormat::Tree => print_tree(graph),
     }
 }
 
@@ -60,7 +38,7 @@ pub fn print_count(graph: &Graph) {
     println!("{}", graph.nodes.len());
 }
 
-fn print_tree(graph: &Graph, hash: bool) -> anyhow::Result<()> {
+fn print_tree(graph: &Graph) -> anyhow::Result<()> {
     // Build children map from Contains edges only
     let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
     let mut has_parent = HashSet::new();
@@ -71,9 +49,7 @@ fn print_tree(graph: &Graph, hash: bool) -> anyhow::Result<()> {
         }
     }
 
-    // Label lookup
-    let labels: HashMap<&str, &str> = graph.nodes.iter().map(|n| (n.id.as_str(), n.label.as_str())).collect();
-    let node_set: HashSet<&str> = graph.nodes.iter().map(|n| n.id.as_str()).collect();
+    let nodes: HashMap<&str, &Node> = graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
     // Roots = nodes with no incoming Contains edge (within the result set)
     let roots: Vec<&str> = graph.nodes.iter()
@@ -81,25 +57,39 @@ fn print_tree(graph: &Graph, hash: bool) -> anyhow::Result<()> {
         .filter(|id| !has_parent.contains(id))
         .collect();
 
-    fn walk(id: &str, depth: usize, hash: bool, children: &HashMap<&str, Vec<&str>>, labels: &HashMap<&str, &str>, node_set: &HashSet<&str>) {
+    fn walk(id: &str, depth: usize, children: &HashMap<&str, Vec<&str>>, nodes: &HashMap<&str, &Node>) {
+        let Some(node) = nodes.get(id) else { return };
         let indent = "  ".repeat(depth);
-        let label = labels.get(id).unwrap_or(&id);
-        if hash {
-            println!("{indent}[{}] {label}", short_hash(id));
+        let stable_id = node.metadata.as_ref()
+            .and_then(|m| m.get("stable_id"))
+            .and_then(|v| v.as_str());
+        let prefix = stable_id.map(|sid| format!("{sid} ")).unwrap_or_default();
+        let marker = if node.kind == NodeKind::Task {
+            let status = node.metadata.as_ref()
+                .and_then(|m| m.get("status"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("todo");
+            match status {
+                "done" => "[x] ",
+                "in-progress" => "[-] ",
+                "dropped" => "[~] ",
+                _ => "[ ] ",
+            }
         } else {
-            println!("{indent}{label}");
-        }
+            ""
+        };
+        println!("{indent}{marker}{prefix}{label}", label = node.label);
         if let Some(kids) = children.get(id) {
             for kid in kids {
-                if node_set.contains(kid) {
-                    walk(kid, depth + 1, hash, children, labels, node_set);
+                if nodes.contains_key(kid) {
+                    walk(kid, depth + 1, children, nodes);
                 }
             }
         }
     }
 
     for root in &roots {
-        walk(root, 0, hash, &children, &labels, &node_set);
+        walk(root, 0, &children, &nodes);
     }
     Ok(())
 }

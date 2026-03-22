@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-topology is a CLI tool that projects heterogeneous file structures into a unified graph representation (Topology) as JSON. It serves as an interface for both agents and humans.
+topology is a roadmap system — a shared human-agent interface for task tracking. It parses markdown roadmaps into a graph (Topology) that both agents and humans can query and update.
 
 ## Current State
 
@@ -12,5 +12,5 @@ This is a greenfield project in the planning phase. See ROADMAP.md for implement
 
 ## Style
 
-minimalism.
-light-weight modular design always comes first.
+- minimalism both on system entropy and design style.
+- light-weight modular design always comes first.
