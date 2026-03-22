@@ -6,7 +6,7 @@ Topology parses markdown roadmaps into a queryable graph, giving agents a map to
 
 ## Background
 
-The coding paradigm has shifted from layful vibe-coding to agent-driven development, but the interface hasn't kept up:
+The coding paradigm has shifted from playful vibe-coding to agent-driven development, but the interface hasn't kept up:
 
 ```mermaid
 graph LR
@@ -33,7 +33,24 @@ graph LR
 
 Topology is the shared state — a roadmap system that both humans and agents can read and write.
 
+## How to use
+
+1. install the topology skills
+
+```
+npx skills add https://github.com/JerryHong08/topology
+```
+
+2. Try it
+```
+hi, can you use /topology skill to help me upgrade/initial my current project ROADMAP system?
+```
+
 ## How it works
+
+Think of your project as a city. ROADMAP.md is the map showing all destinations, `roadmap/*.md` are the detailed routes to each one. The `topo` skill teaches agents to read and update the map; the CLI is their navigation tool.
+
+In the future I will introduce hooks and api endpoint which will enable human to manage the tasks, orchestrate the agents in web UI.
 
 **For Agents:**
 - `topo` CLI navigates the roadmap: find tasks, read context, update status
