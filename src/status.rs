@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -7,7 +6,6 @@ use std::path::Path;
 use crate::graph::{EdgeKind, Graph, NodeKind};
 use crate::scan::markdown::parse_markdown;
 
-#[derive(Serialize)]
 pub struct StatusOutput {
     pub total: usize,
     pub done: usize,
@@ -15,7 +13,6 @@ pub struct StatusOutput {
     pub stages: Vec<Stage>,
 }
 
-#[derive(Serialize)]
 pub struct Stage {
     pub name: String,
     pub total: usize,
@@ -23,16 +20,13 @@ pub struct Stage {
     pub tasks: Vec<TaskSummary>,
 }
 
-#[derive(Serialize)]
 pub struct TaskSummary {
     pub id: String,
     pub label: String,
     pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub subtasks: Option<SubtaskCount>,
 }
 
-#[derive(Serialize)]
 pub struct SubtaskCount {
     pub total: usize,
     pub done: usize,
@@ -50,7 +44,40 @@ pub fn run(roadmap_path: &Path) -> Result<()> {
     parse_markdown(&file_id, &content, &mut graph, &mut Vec::new());
 
     let output = build(&graph);
-    println!("{}", serde_json::to_string_pretty(&output)?);
+
+    // Print agent-native format
+    println!("Progress: {}/{} tasks done", output.done, output.total);
+    if output.todo > 0 {
+        println!("Remaining: {}", output.todo);
+    }
+    println!();
+
+    for stage in &output.stages {
+        if stage.total == 0 {
+            continue;
+        }
+        let pct = if stage.total > 0 {
+            (stage.done * 100) / stage.total
+        } else {
+            0
+        };
+        println!("{} — {}/{} ({}%)", stage.name, stage.done, stage.total, pct);
+        for task in &stage.tasks {
+            let marker = match task.status.as_str() {
+                "done" => "[x]",
+                "in-progress" => "[-]",
+                "dropped" => "[~]",
+                _ => "[ ]",
+            };
+            if let Some(sub) = &task.subtasks {
+                println!("  {} {} {}/{} subtasks", marker, task.label, sub.done, sub.total);
+            } else {
+                println!("  {} {}", marker, task.label);
+            }
+        }
+        println!();
+    }
+
     Ok(())
 }
 

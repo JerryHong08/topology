@@ -43,7 +43,7 @@ npx skills add https://github.com/JerryHong08/topology
 
 2. Try it
 ```
-hi, can you use /topology skill to help me upgrade/initial my current project ROADMAP system?
+hi, can you use /topology skill to help me upgrade/initial my current project tasks?
 ```
 
 ## How it works
