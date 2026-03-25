@@ -19,6 +19,9 @@ impl MarkdownScanner {
         let root = root.canonicalize()?;
         let mut graph = Graph::default();
 
+        // Create a gitignore matcher for filtering
+        let gitignore = ignore::gitignore::Gitignore::new(root.join(".gitignore")).0;
+
         for entry in ignore::WalkBuilder::new(&root)
             .hidden(false)
             .filter_entry(|e| e.file_name() != ".git")
@@ -35,13 +38,25 @@ impl MarkdownScanner {
             }
 
             let rel = abs.strip_prefix(&root)?;
+            let rel_str = rel.to_string_lossy();
             let file_id = if rel.as_os_str().is_empty() {
                 root.file_name()
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default()
             } else {
-                rel.to_string_lossy().replace('\\', "/")
+                rel_str.replace('\\', "/")
             };
+
+            // Check if file is gitignored
+            let is_gitignored = gitignore.matched(&rel, false).is_ignore();
+
+            // Always allow ROADMAP.md and roadmap/*.md even if gitignored
+            let is_roadmap = file_id == "ROADMAP.md" || file_id.starts_with("roadmap/");
+
+            if is_gitignored && !is_roadmap {
+                continue;
+            }
+
             let content = fs::read_to_string(abs)?;
             parse_markdown(&file_id, &content, &mut graph, links);
         }
