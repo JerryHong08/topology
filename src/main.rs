@@ -8,6 +8,7 @@ mod query;
 mod resolve;
 mod scan;
 mod status;
+mod unarchive;
 mod update;
 
 use anyhow::Result;
@@ -105,6 +106,20 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Restore archived tasks from ARCHIVE.md back to ROADMAP.md
+    Unarchive {
+        /// Project root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+
+        /// Task ID to unarchive (e.g., "1.1"). If not specified, shows available archived tasks.
+        #[arg()]
+        task_id: Option<String>,
+
+        /// Preview what would be unarchived without writing
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Query the topology graph with traversal and filters
     Query {
         /// Filter expressions (e.g. -f type=task -f status=todo -f "label~keyword")
@@ -194,6 +209,9 @@ fn main() -> Result<()> {
         }
         Commands::Archive { root, dry_run } => {
             archive::run(&root, dry_run)?;
+        }
+        Commands::Unarchive { root, task_id, dry_run } => {
+            unarchive::run(&root, task_id.as_deref(), dry_run)?;
         }
         Commands::Query { filters, path, format, count, roots, children, descendants, ancestors, references, referenced_by, next, status: show_status } => {
             let graph = scan::run_cached(&path)?;
