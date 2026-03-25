@@ -26,25 +26,35 @@ fn indent_level(line: &str) -> usize {
 struct Block {
     lines: Vec<String>,
     archivable: bool,
+    /// True if this is a section header (non-task content before first task)
+    is_header: bool,
 }
 
 fn collect_blocks(lines: &[&str]) -> Vec<Block> {
     let mut blocks: Vec<Block> = Vec::new();
     let mut i = 0;
+    let mut seen_first_task = false;
+
     while i < lines.len() {
         if !is_task_line(lines[i]) {
-            // Non-task line is its own "block" (never archivable)
+            // Non-task line
+            // Check if this is a header (content before first task in section)
+            let is_header = !seen_first_task;
             blocks.push(Block {
                 lines: vec![lines[i].to_string()],
                 archivable: false,
+                is_header,
             });
             i += 1;
             continue;
         }
+
+        seen_first_task = true;
         let base_indent = indent_level(lines[i]);
         let mut block_lines = vec![lines[i].to_string()];
         let mut all_done = is_done_or_dropped(lines[i]);
         i += 1;
+
         while i < lines.len() {
             if is_task_line(lines[i]) && indent_level(lines[i]) > base_indent {
                 if !is_done_or_dropped(lines[i]) {
@@ -56,11 +66,14 @@ fn collect_blocks(lines: &[&str]) -> Vec<Block> {
                 break;
             }
         }
+
         blocks.push(Block {
             lines: block_lines,
             archivable: all_done,
+            is_header: false,
         });
     }
+
     blocks
 }
 
@@ -90,8 +103,8 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
     }
 
     // For each section, collect blocks, separate archivable vs remaining
-    // archived: section_name -> Vec<block_lines>
-    let mut archived: BTreeMap<String, Vec<Vec<String>>> = BTreeMap::new();
+    // archived: section_name -> (header_lines, Vec<task_blocks>)
+    let mut archived: BTreeMap<String, (Vec<String>, Vec<Vec<String>>)> = BTreeMap::new();
     let mut remaining_lines: Vec<String> = Vec::new();
 
     for (section_name, section_lines) in &sections {
@@ -100,13 +113,21 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
         }
 
         let blocks = collect_blocks(section_lines);
+        let mut current_header: Vec<String> = Vec::new();
+
         for block in &blocks {
-            if block.archivable {
+            if block.is_header {
+                // Collect header lines
+                current_header.extend(block.lines.clone());
+                remaining_lines.extend(block.lines.clone());
+            } else if block.archivable {
                 if let Some(name) = section_name {
-                    archived
-                        .entry(name.clone())
-                        .or_default()
-                        .push(block.lines.clone());
+                    let entry = archived.entry(name.clone()).or_default();
+                    // Store header if not already stored
+                    if entry.0.is_empty() && !current_header.is_empty() {
+                        entry.0 = current_header.clone();
+                    }
+                    entry.1.push(block.lines.clone());
                 }
             } else {
                 for l in &block.lines {
@@ -123,8 +144,11 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
 
     if dry_run {
         println!("would archive:");
-        for (section, blocks) in &archived {
+        for (section, (header, blocks)) in &archived {
             println!("\n## {}", section);
+            for line in header {
+                println!("{}", line);
+            }
             for block in blocks {
                 for line in block {
                     println!("{}", line);
@@ -161,8 +185,13 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
     }
 
     // Merge new archived blocks
-    for (section, blocks) in &archived {
+    for (section, (header, blocks)) in &archived {
         let entry = archive_sections.entry(section.clone()).or_default();
+        // Add header first (for context)
+        for line in header {
+            entry.push(line.clone());
+        }
+        // Add archived tasks
         for block in blocks {
             for line in block {
                 entry.push(line.clone());
@@ -175,14 +204,16 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
     for (section, lines) in &archive_sections {
         out.push_str(&format!("\n## {}\n", section));
         for line in lines {
-            out.push_str(line);
-            out.push('\n');
+            if !line.trim().is_empty() {
+                out.push_str(line);
+                out.push('\n');
+            }
         }
     }
     std::fs::write(&archive_path, &out)?;
 
     // Summary
-    let total: usize = archived.values().map(|b| b.len()).sum();
+    let total: usize = archived.values().map(|(_, blocks)| blocks.len()).sum();
     println!("archived {} task block(s) to ARCHIVE.md", total);
 
     Ok(())
