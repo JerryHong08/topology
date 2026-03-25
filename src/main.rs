@@ -1,3 +1,6 @@
+mod add;
+mod archive;
+mod context;
 mod diff;
 mod graph;
 mod output;
@@ -5,9 +8,7 @@ mod query;
 mod resolve;
 mod scan;
 mod status;
-mod context;
 mod update;
-mod archive;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -68,6 +69,27 @@ enum Commands {
 
         /// Field assignment (e.g. "status=done")
         assignment: String,
+
+        /// Project root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
+    /// Add a new task to ROADMAP.md
+    Add {
+        /// Task description
+        description: String,
+
+        /// Section number to add task to (e.g., 1, 2, 3)
+        #[arg(long)]
+        section: usize,
+
+        /// Create detail doc for discussion
+        #[arg(long)]
+        discuss: bool,
+
+        /// Parent task ID (for subtasks)
+        #[arg(long)]
+        parent: Option<String>,
 
         /// Project root directory
         #[arg(long, default_value = ".")]
@@ -166,6 +188,9 @@ fn main() -> Result<()> {
             let graph = scan::run_cached(&root)?;
             let canonical = resolve::resolve(&graph, &id)?;
             update::run(&canonical, &assignment, &root)?;
+        }
+        Commands::Add { description, section, discuss, parent, root } => {
+            add::run(&description, section, discuss, parent.as_deref(), &root)?;
         }
         Commands::Archive { root, dry_run } => {
             archive::run(&root, dry_run)?;
