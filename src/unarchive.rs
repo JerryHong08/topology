@@ -153,37 +153,51 @@ pub fn run(root: &Path, task_id: Option<&str>, dry_run: bool) -> Result<()> {
         return Ok(());
     }
 
-    // Parse ROADMAP.md into sections
-    let mut roadmap_sections: BTreeMap<String, (Vec<String>, Vec<String>)> = BTreeMap::new();
-    // (before_lines, task_lines) - lines before first task, and task lines
+    // Parse ROADMAP.md into sections with proper structure
+    // section -> (header_lines before tasks, task_lines, description_lines after tasks)
+    let mut roadmap_sections: BTreeMap<String, SectionContent> = BTreeMap::new();
+
+    struct SectionContent {
+        header: Vec<String>,      // ## Section name + description before tasks
+        tasks: Vec<String>,       // Task lines
+        footer: Vec<String>,      // Description after tasks (if any)
+    }
 
     let mut current_roadmap_section: Option<String> = None;
-    let mut section_header_lines: Vec<String> = Vec::new();
-    let mut section_task_lines: Vec<String> = Vec::new();
+    let mut current_header: Vec<String> = Vec::new();
+    let mut current_tasks: Vec<String> = Vec::new();
+    let mut current_footer: Vec<String> = Vec::new();
     let mut pre_section_lines: Vec<String> = Vec::new();
     let mut in_tasks = false;
+    let mut after_tasks = false;
 
     for line in roadmap_content.lines() {
         if line.starts_with("## ") {
             // Save previous section
             if let Some(ref sec) = current_roadmap_section {
-                roadmap_sections.insert(sec.clone(), (section_header_lines.clone(), section_task_lines.clone()));
+                roadmap_sections.insert(sec.clone(), SectionContent {
+                    header: current_header.clone(),
+                    tasks: current_tasks.clone(),
+                    footer: current_footer.clone(),
+                });
             } else {
                 // Lines before first H2
-                pre_section_lines = section_header_lines.clone();
+                pre_section_lines.extend(current_header.clone());
             }
             // Start new section
             let title = line.trim_start_matches("## ").to_string();
             current_roadmap_section = Some(title);
-            section_header_lines = vec![line.to_string()];
-            section_task_lines = Vec::new();
+            current_header = vec![line.to_string()];
+            current_tasks = Vec::new();
+            current_footer = Vec::new();
             in_tasks = false;
+            after_tasks = false;
         } else if line.starts_with("# ") {
-            // H1 - just preserve it
+            // H1 - add to pre_section_lines if before first H2
             if current_roadmap_section.is_none() {
-                pre_section_lines.push(line.to_string());
+                current_header.push(line.to_string());
             } else {
-                section_header_lines.push(line.to_string());
+                current_header.push(line.to_string());
             }
         } else {
             if current_roadmap_section.is_none() {
@@ -192,30 +206,47 @@ pub fn run(root: &Path, task_id: Option<&str>, dry_run: bool) -> Result<()> {
                 // Check if this is a task line
                 if is_task_line(line) {
                     in_tasks = true;
-                    section_task_lines.push(line.to_string());
+                    after_tasks = false;
+                    current_tasks.push(line.to_string());
                 } else if in_tasks && line.trim().is_empty() {
-                    // Empty line after tasks
-                    section_task_lines.push(line.to_string());
+                    // Empty line after tasks - might be end of tasks
+                    current_tasks.push(line.to_string());
+                } else if in_tasks && !line.trim().is_empty() && !is_task_line(line) {
+                    // Non-task, non-empty line after tasks = footer/description
+                    after_tasks = true;
+                    current_footer.push(line.to_string());
                 } else {
-                    section_header_lines.push(line.to_string());
+                    // Before tasks or in footer
+                    if after_tasks {
+                        current_footer.push(line.to_string());
+                    } else {
+                        current_header.push(line.to_string());
+                    }
                 }
             }
         }
     }
     // Save last section
     if let Some(ref sec) = current_roadmap_section {
-        roadmap_sections.insert(sec.clone(), (section_header_lines.clone(), section_task_lines.clone()));
+        roadmap_sections.insert(sec.clone(), SectionContent {
+            header: current_header.clone(),
+            tasks: current_tasks.clone(),
+            footer: current_footer.clone(),
+        });
     }
 
     // Merge restored tasks into roadmap sections
     for (section, tasks) in &tasks_to_restore {
-        if let Some((header, existing_tasks)) = roadmap_sections.get_mut(section) {
+        if let Some(content) = roadmap_sections.get_mut(section) {
             // Section exists - append tasks
-            existing_tasks.extend(tasks.clone());
+            content.tasks.extend(tasks.clone());
         } else {
             // Section doesn't exist - create it
-            let header = vec![format!("## {}", section)];
-            roadmap_sections.insert(section.clone(), (header, tasks.clone()));
+            roadmap_sections.insert(section.clone(), SectionContent {
+                header: vec![format!("## {}", section), "".to_string()],
+                tasks: tasks.clone(),
+                footer: Vec::new(),
+            });
         }
     }
 
@@ -228,13 +259,24 @@ pub fn run(root: &Path, task_id: Option<&str>, dry_run: bool) -> Result<()> {
         roadmap_out.push('\n');
     }
 
-    // Add sections
-    for (section, (header, tasks)) in &roadmap_sections {
-        for line in header {
+    // Add sections with blank line between them
+    let mut first_section = true;
+    for (_section, content) in &roadmap_sections {
+        // Add blank line before section (except first)
+        if !first_section {
+            roadmap_out.push('\n');
+        }
+        first_section = false;
+
+        for line in &content.header {
             roadmap_out.push_str(line);
             roadmap_out.push('\n');
         }
-        for line in tasks {
+        for line in &content.tasks {
+            roadmap_out.push_str(line);
+            roadmap_out.push('\n');
+        }
+        for line in &content.footer {
             roadmap_out.push_str(line);
             roadmap_out.push('\n');
         }

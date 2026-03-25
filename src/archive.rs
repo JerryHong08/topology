@@ -160,7 +160,8 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
 
     // Write remaining ROADMAP.md
     let mut roadmap_out = remaining_lines.join("\n");
-    if content.ends_with('\n') {
+    // Ensure file ends with newline and has proper spacing
+    if !roadmap_out.ends_with('\n') {
         roadmap_out.push('\n');
     }
     std::fs::write(&roadmap_path, roadmap_out)?;
@@ -187,9 +188,11 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
     // Merge new archived blocks
     for (section, (header, blocks)) in &archived {
         let entry = archive_sections.entry(section.clone()).or_default();
-        // Add header first (for context)
-        for line in header {
-            entry.push(line.clone());
+        // Add header only if section is empty (new section)
+        if entry.is_empty() {
+            for line in header {
+                entry.push(line.clone());
+            }
         }
         // Add archived tasks
         for block in blocks {
@@ -203,11 +206,16 @@ pub fn run(root: &Path, dry_run: bool) -> Result<()> {
     let mut out = String::from("# Archive\n");
     for (section, lines) in &archive_sections {
         out.push_str(&format!("\n## {}\n", section));
+        // Deduplicate consecutive empty lines
+        let mut prev_empty = false;
         for line in lines {
-            if !line.trim().is_empty() {
-                out.push_str(line);
-                out.push('\n');
+            let is_empty = line.trim().is_empty();
+            if is_empty && prev_empty {
+                continue; // Skip duplicate empty lines
             }
+            out.push_str(line);
+            out.push('\n');
+            prev_empty = is_empty;
         }
     }
     std::fs::write(&archive_path, &out)?;
