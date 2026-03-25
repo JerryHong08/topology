@@ -95,6 +95,28 @@ pub fn build(graph: &Graph) -> StatusOutput {
     let node_map: HashMap<&str, &crate::graph::Node> =
         graph.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
+    // Helper function to recursively collect all descendant tasks
+    fn collect_all_tasks<'a>(
+        node_id: &str,
+        children: &HashMap<String, Vec<String>>,
+        node_map: &HashMap<&str, &'a crate::graph::Node>,
+        tasks: &mut Vec<&'a crate::graph::Node>,
+    ) {
+        let empty = Vec::new();
+        let child_ids = children.get(node_id).unwrap_or(&empty);
+
+        for child_id in child_ids {
+            if let Some(child) = node_map.get(child_id.as_str()) {
+                if child.kind == NodeKind::Task {
+                    tasks.push(child);
+                } else if child.kind == NodeKind::Section {
+                    // Recurse into subsections (H3, H4, etc.)
+                    collect_all_tasks(child_id, children, node_map, tasks);
+                }
+            }
+        }
+    }
+
     let mut stages = Vec::new();
     let mut total_all = 0usize;
     let mut done_all = 0usize;
@@ -113,19 +135,16 @@ pub fn build(graph: &Graph) -> StatusOutput {
             continue;
         }
 
+        // Collect all tasks from this section and its subsections
+        let mut all_tasks: Vec<&crate::graph::Node> = Vec::new();
+        collect_all_tasks(&node.id, &children, &node_map, &mut all_tasks);
+
         let mut stage_tasks = Vec::new();
-        let empty = Vec::new();
-        let top_level_ids = children.get(&node.id).unwrap_or(&empty);
 
-        for child_id in top_level_ids {
-            let Some(child) = node_map.get(child_id.as_str()) else {
-                continue;
-            };
-            if child.kind != NodeKind::Task {
-                continue;
-            }
-
-            let sub_ids = children.get(child_id.as_str()).unwrap_or(&empty);
+        for task in all_tasks {
+            // Get direct subtasks of this task
+            let empty = Vec::new();
+            let sub_ids = children.get(&task.id).unwrap_or(&empty);
             let subtask_nodes: Vec<_> = sub_ids
                 .iter()
                 .filter_map(|id| node_map.get(id.as_str()))
@@ -133,7 +152,7 @@ pub fn build(graph: &Graph) -> StatusOutput {
                 .collect();
 
             let (status, subtasks) = if subtask_nodes.is_empty() {
-                let s = child
+                let s = task
                     .metadata
                     .as_ref()
                     .and_then(|m| m.get("status"))
@@ -163,8 +182,8 @@ pub fn build(graph: &Graph) -> StatusOutput {
             };
 
             stage_tasks.push(TaskSummary {
-                id: child_id.clone(),
-                label: child.label.clone(),
+                id: task.id.clone(),
+                label: task.label.clone(),
                 status,
                 subtasks,
             });
