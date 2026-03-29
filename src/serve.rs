@@ -106,18 +106,8 @@ struct GraphData {
     docs: Graph,
 }
 
-#[derive(Deserialize)]
-struct UpdateTaskRequest {
-    status: Option<String>,
-}
-
 // Re-export ops types for API use
-use crate::ops::AddTaskInput;
-
-#[derive(Deserialize)]
-struct UnarchiveRequest {
-    task_id: Option<String>,
-}
+use crate::ops::{AddTaskInput, UpdateTaskInput, UnarchiveInput};
 
 #[derive(Serialize)]
 struct ApiResponse {
@@ -269,41 +259,39 @@ async fn get_task(
 async fn update_task(
     Path(id): Path<String>,
     State(state): State<AppState>,
-    Json(body): Json<UpdateTaskRequest>,
+    Json(body): Json<UpdateTaskInput>,
 ) -> Json<ApiResponse> {
-    if let Some(status) = body.status {
-        // Resolve ID
-        let graph = state.graph.read().await;
-        let canonical = crate::resolve::resolve(&graph, &id);
+    // Resolve ID
+    let graph = state.graph.read().await;
+    let canonical = crate::resolve::resolve(&graph, &id);
 
-        match canonical {
-            Ok(canonical_id) => {
-                // Run update in blocking context
-                let root = state.root.clone();
-                let status_for_update = status.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    crate::update::run(&canonical_id, &format!("status={}", status_for_update), &root)
-                }).await;
+    match canonical {
+        Ok(canonical_id) => {
+            // Run update in blocking context
+            let root = state.root.clone();
+            let input = body.clone();
+            let id_for_response = id.clone();
+            let status_for_ws = body.status.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                crate::ops::update::run(&canonical_id, &input, &root)
+            }).await;
 
-                match result {
-                    Ok(Ok(_)) => {
-                        // Broadcast update
-                        let _ = state.ws_tx.send(WsMessage {
-                            msg_type: "task_updated".into(),
-                            data: None,
-                            id: Some(id.clone()),
-                            status: Some(status.clone()),
-                        });
-                        Json(ApiResponse { success: true, id: Some(id), error: None })
-                    }
-                    Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
-                    Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
+            match result {
+                Ok(Ok(_)) => {
+                    // Broadcast update
+                    let _ = state.ws_tx.send(WsMessage {
+                        msg_type: "task_updated".into(),
+                        data: None,
+                        id: Some(id_for_response.clone()),
+                        status: status_for_ws.clone(),
+                    });
+                    Json(ApiResponse { success: true, id: Some(id_for_response), error: None })
                 }
+                Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
+                Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
             }
-            Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
         }
-    } else {
-        Json(ApiResponse { success: false, id: None, error: Some("no status provided".into()) })
+        Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
     }
 }
 
@@ -345,8 +333,9 @@ async fn delete_task(
     match canonical {
         Ok(canonical_id) => {
             let root = state.root.clone();
+            let id_for_response = id.clone();
             let result = tokio::task::spawn_blocking(move || {
-                crate::delete::run(&canonical_id, &root)
+                crate::ops::delete::run(&canonical_id, &root)
             }).await;
 
             match result {
@@ -354,10 +343,10 @@ async fn delete_task(
                     let _ = state.ws_tx.send(WsMessage {
                         msg_type: "task_deleted".into(),
                         data: None,
-                        id: Some(id.clone()),
+                        id: Some(id_for_response.clone()),
                         status: None,
                     });
-                    Json(ApiResponse { success: true, id: Some(id), error: None })
+                    Json(ApiResponse { success: true, id: Some(id_for_response), error: None })
                 }
                 Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
                 Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
@@ -370,7 +359,7 @@ async fn delete_task(
 async fn archive_tasks(State(state): State<AppState>) -> Json<ApiResponse> {
     let root = state.root.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::archive::run(&root, false)
+        crate::ops::archive::run(&root, false)
     }).await;
 
     match result {
@@ -390,12 +379,12 @@ async fn archive_tasks(State(state): State<AppState>) -> Json<ApiResponse> {
 
 async fn unarchive_tasks(
     State(state): State<AppState>,
-    Json(body): Json<UnarchiveRequest>,
+    Json(body): Json<UnarchiveInput>,
 ) -> Json<ApiResponse> {
     let root = state.root.clone();
-    let task_id = body.task_id.clone();
+    let input = body.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::unarchive::run(&root, task_id.as_deref(), false)
+        crate::ops::unarchive::run(&root, &input, false)
     }).await;
 
     match result {

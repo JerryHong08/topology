@@ -1,5 +1,7 @@
 pub mod add;
+pub mod archive;
 pub mod delete;
+pub mod unarchive;
 pub mod update;
 
 use serde::{Deserialize, Serialize};
@@ -18,6 +20,22 @@ pub struct AddTaskInput {
     /// Accepts both snake_case (task_description) and camelCase (taskDescription)
     #[serde(default, alias = "taskDescription")]
     pub task_description: Option<String>,
+}
+
+/// Common request format for updating a task
+#[derive(Deserialize, Serialize, Clone)]
+pub struct UpdateTaskInput {
+    /// Task status: todo, done, in-progress, dropped
+    #[serde(default)]
+    pub status: Option<String>,
+}
+
+/// Common request format for unarchiving a task
+#[derive(Deserialize, Serialize, Clone)]
+pub struct UnarchiveInput {
+    /// Task ID to unarchive (e.g., "1.1")
+    #[serde(default, alias = "taskId")]
+    pub task_id: Option<String>,
 }
 
 /// Common response format for operations
