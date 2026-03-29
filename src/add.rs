@@ -183,7 +183,7 @@ Concrete implementation steps.
 
     let mut insert_line = None;
     let mut in_target_section = false;
-    let mut last_task_in_section: Option<usize> = None;
+    let mut last_task_line: Option<usize> = None;
 
     for (i, line) in lines.iter().enumerate() {
         if line.starts_with(&section_heading) {
@@ -194,20 +194,20 @@ Concrete implementation steps.
         if in_target_section {
             // Check if we've moved to next section
             if line.starts_with("## ") || line.starts_with("# ") {
-                // Use the last task line found, or insert at section start
-                insert_line = last_task_in_section.map(|n| n + 1).or(Some(i));
+                // Insert before this section
+                insert_line = Some(i);
                 break;
             }
 
-            // Track tasks in this section (both top-level and subtasks)
+            // Track tasks in this section
             if line.trim().starts_with("- [") {
-                last_task_in_section = Some(i);
+                last_task_line = Some(i);
             }
 
             // For subtasks, find the parent task
             if let Some(parent_id) = parent {
                 if line.contains(&format!("{} ", parent_id)) && line.trim().starts_with("- [") {
-                    // Found parent, insert subtask after it and its subtasks
+                    // Found parent, insert subtask after it and its content
                     let mut j = i + 1;
                     while j < lines.len() {
                         let next = lines[j];
@@ -227,10 +227,43 @@ Concrete implementation steps.
         }
     }
 
-    // If we didn't find an insert point, use last task + 1 or append
-    let insert_idx = insert_line
-        .or(last_task_in_section.map(|n| n + 1))
-        .unwrap_or(lines.len());
+    // If we found a parent subtask, use that insert point
+    // Otherwise, find the end of the last task (including its description)
+    let insert_idx = if insert_line.is_some() {
+        insert_line.unwrap()
+    } else if let Some(last_idx) = last_task_line {
+        // Find where the last task's content ends
+        // A task's content includes the task line and any indented description lines after it
+        let mut end_idx = last_idx + 1;
+        while end_idx < lines.len() {
+            let next_line = lines[end_idx];
+            // Stop if we hit another task, a heading, or an empty/non-indented line that's not part of description
+            if next_line.trim().starts_with("- [") {
+                break;
+            }
+            if next_line.starts_with("## ") || next_line.starts_with("# ") {
+                break;
+            }
+            // Description lines are indented (start with spaces) or are continuation of the task
+            // Empty lines are OK, but we stop at non-indented non-empty lines
+            if !next_line.is_empty() && !next_line.starts_with("  ") {
+                break;
+            }
+            end_idx += 1;
+        }
+        end_idx
+    } else {
+        // No tasks in section, insert after section heading
+        // Find the line after section heading
+        let mut start_idx = 0;
+        for (i, line) in lines.iter().enumerate() {
+            if line.starts_with(&section_heading) {
+                start_idx = i + 1;
+                break;
+            }
+        }
+        start_idx
+    };
 
     // Build new content
     let mut new_lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
