@@ -110,6 +110,57 @@ cargo install --path .
 
 Requires Rust toolchain. The binary is installed to `~/.cargo/bin/topo`.
 
+## Architecture
+
+```
+src/
+├── ops/                    # Core business logic
+│   ├── mod.rs              # Shared data types (AddTaskInput, UpdateTaskInput, etc.)
+│   ├── add.rs              # Add task logic
+│   ├── delete.rs           # Delete task logic
+│   ├── update.rs           # Update task status
+│   ├── archive.rs          # Archive done/dropped tasks
+│   └── unarchive.rs        # Restore archived tasks
+│
+├── serve.rs                # HTTP API + WebSocket
+├── main.rs                 # CLI entry point
+├── scan/                   # Markdown parser
+├── graph.rs                # Data structures
+└── query.rs                # Graph traversal
+```
+
+**Call flow:**
+
+```
+         ┌─────────────┐
+         │   Request   │
+         └──────┬──────┘
+                │
+    ┌───────────┴───────────┐
+    ▼                       ▼
+┌───────┐              ┌─────────┐
+│  CLI  │              │   API   │
+│main.rs│              │serve.rs │
+└───┬───┘              └────┬────┘
+    │                       │
+    │  println         spawn_blocking
+    │                  + WebSocket
+    │                       │
+    └───────────┬───────────┘
+                ▼
+         ┌─────────────┐
+         │    ops/     │  ← Core logic
+         └─────────────┘
+                │
+                ▼
+         ┌─────────────┐
+         │ ROADMAP.md  │
+         │ ARCHIVE.md  │
+         └─────────────┘
+```
+
+Both CLI and API use the same core operations from `ops/`, ensuring consistent behavior.
+
 ## Inspired by
 
 - [OpenAI symphony](https://github.com/openai/symphony/tree/main): spec driven development orchestration
