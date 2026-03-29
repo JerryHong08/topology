@@ -303,7 +303,7 @@ async fn add_task(
     let input = body.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        crate::ops::add::run(&input, &root)
+        crate::ops::add::run(&input, false, &root)
     }).await;
 
     match result {

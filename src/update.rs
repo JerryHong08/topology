@@ -1,10 +1,12 @@
+// This module wraps ops::update for backwards compatibility with CLI
+// The core logic is in ops::update.rs
+
 use anyhow::{bail, Result};
-use std::collections::HashMap;
 use std::path::Path;
 
-use crate::graph::{Graph, NodeKind};
-use crate::scan::markdown::{extract_numeric_id, make_id, parse_markdown, slugify};
+use crate::ops::{self, UpdateTaskInput};
 
+/// Legacy interface for CLI compatibility (accepts "field=value" string)
 pub fn run(id: &str, assignment: &str, root: &Path) -> Result<()> {
     let (field, value) = assignment
         .split_once('=')
@@ -13,85 +15,13 @@ pub fn run(id: &str, assignment: &str, root: &Path) -> Result<()> {
     if field != "status" {
         bail!("unsupported field '{}', only 'status' is supported", field);
     }
-    let valid = ["done", "todo", "in-progress", "dropped"];
-    if !valid.contains(&value) {
-        bail!("unsupported value '{}', expected one of: {}", value, valid.join(", "));
-    }
 
-    let (file_id, _slug) = id
-        .split_once('#')
-        .ok_or_else(|| anyhow::anyhow!("invalid ID, expected file#slug"))?;
-
-    let file_path = root.join(file_id);
-    let content = std::fs::read_to_string(&file_path)
-        .map_err(|_| anyhow::anyhow!("cannot read {}", file_path.display()))?;
-
-    // Parse to verify the node exists and is a task
-    let mut graph = Graph::default();
-    parse_markdown(file_id, &content, &mut graph, &mut Vec::new());
-
-    let node = graph.nodes.iter().find(|n| n.id == id);
-    match node {
-        None => bail!("node '{}' not found", id),
-        Some(n) if n.kind != NodeKind::Task => bail!("node '{}' is not a task", id),
-        _ => {}
-    }
-
-    // Reconstruct IDs line-by-line to find the target checkbox
-    let lines: Vec<&str> = content.lines().collect();
-    let mut slug_counts: HashMap<String, usize> = HashMap::new();
-    let mut target_line: Option<usize> = None;
-
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim_start();
-        let is_task = trimmed.starts_with("- [x] ")
-            || trimmed.starts_with("- [X] ")
-            || trimmed.starts_with("- [ ] ")
-            || trimmed.starts_with("- [-] ")
-            || trimmed.starts_with("- [~] ");
-        if !is_task {
-            continue;
-        }
-        let prefix_len = "- [x] ".len();
-        let raw_label = trimmed[prefix_len..].trim();
-        // Strip numeric ID prefix to match how parser generates slugs
-        let label = match extract_numeric_id(raw_label) {
-            Some((_, rest)) => rest,
-            None => raw_label,
-        };
-        let slug = slugify(label);
-        let reconstructed_id = make_id(file_id, &slug, &mut slug_counts);
-        if reconstructed_id == id {
-            target_line = Some(i);
-            break;
-        }
-    }
-
-    let line_idx = target_line.ok_or_else(|| anyhow::anyhow!("checkbox for '{}' not found", id))?;
-
-    let mut new_lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
-    let line = &new_lines[line_idx];
-    let marker = match value {
-        "done" => "[x]",
-        "todo" => "[ ]",
-        "in-progress" => "[-]",
-        "dropped" => "[~]",
-        _ => bail!("unsupported value '{}'", value),
+    let input = UpdateTaskInput {
+        status: Some(value.to_string()),
     };
-    let new_line = line
-        .replacen("- [ ] ", &format!("- {} ", marker), 1)
-        .replacen("- [x] ", &format!("- {} ", marker), 1)
-        .replacen("- [X] ", &format!("- {} ", marker), 1)
-        .replacen("- [-] ", &format!("- {} ", marker), 1)
-        .replacen("- [~] ", &format!("- {} ", marker), 1);
-    new_lines[line_idx] = new_line;
 
-    let mut output = new_lines.join("\n");
-    if content.ends_with('\n') {
-        output.push('\n');
-    }
-    std::fs::write(&file_path, output)?;
-    println!("updated {} → {}={}", id, field, value);
+    ops::update::run(id, &input, root)?;
+    println!("updated {} → status={}", id, value);
     Ok(())
 }
 
@@ -183,7 +113,6 @@ mod tests {
     fn task_with_numeric_id() {
         let dir = temp_dir();
         write_md(&dir, "T.md", "# S\n- [ ] 1.1 Scan project\n- [ ] 1.2 Query engine\n");
-        // The node ID is based on label without numeric prefix
         run("T.md#scan-project", "status=done", &dir).unwrap();
         let result = std::fs::read_to_string(dir.join("T.md")).unwrap();
         assert!(result.contains("- [x] 1.1 Scan project"));
