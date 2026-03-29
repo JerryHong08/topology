@@ -1,14 +1,16 @@
-# Roadmap
-
 See [convention](.claude/skills/topology/CONVENTION.md) for markdown writing rules.
 
+# Roadmap
 ## 3. Convention
 
 ## 6. Exploration
 
 - [ ] 6.1 Watch — re-scan on file change, emit diff stream
-- [ ] 6.2 Web UI for task add
-- [x] 6.3 CLI task creation — `topo add "description" --section <N>` to add tasks programmatically
-- [x] 6.4 unarchive command to restore archived tasks
 
 ## Open Issues
+
+- [ ] 每个任务允许添加简短描述区块
+  - [ ] task meta data框架
+  - [ ] convention更新
+  - [ ] topo cli更新
+  - [ ] add task 更新为对应task meta框架添加task

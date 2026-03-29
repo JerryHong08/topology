@@ -1,12 +1,14 @@
 mod add;
 mod archive;
 mod context;
+mod delete;
 mod diff;
 mod graph;
 mod output;
 mod query;
 mod resolve;
 mod scan;
+mod serve;
 mod status;
 mod unarchive;
 mod update;
@@ -170,6 +172,16 @@ enum Commands {
         #[arg(long)]
         status: bool,
     },
+    /// Start web server with WebSocket real-time updates
+    Serve {
+        /// Project root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+
+        /// Port to listen on
+        #[arg(long, default_value = "7777")]
+        port: u16,
+    },
 }
 
 fn main() -> Result<()> {
@@ -288,6 +300,11 @@ fn main() -> Result<()> {
             } else {
                 output::print_graph(&result, &format)?;
             }
+        }
+        Commands::Serve { root, port } => {
+            tokio::runtime::Runtime::new()
+                .expect("failed to create tokio runtime")
+                .block_on(serve::run(root, port))?;
         }
     }
     Ok(())

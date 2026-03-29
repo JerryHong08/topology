@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -6,6 +7,7 @@ use std::path::Path;
 use crate::graph::{EdgeKind, Graph, NodeKind};
 use crate::scan::markdown::parse_markdown;
 
+#[derive(Serialize)]
 pub struct StatusOutput {
     pub total: usize,
     pub done: usize,
@@ -13,6 +15,7 @@ pub struct StatusOutput {
     pub stages: Vec<Stage>,
 }
 
+#[derive(Serialize)]
 pub struct Stage {
     pub name: String,
     pub total: usize,
@@ -20,6 +23,7 @@ pub struct Stage {
     pub tasks: Vec<TaskSummary>,
 }
 
+#[derive(Serialize)]
 pub struct TaskSummary {
     pub id: String,
     pub label: String,
@@ -27,6 +31,7 @@ pub struct TaskSummary {
     pub subtasks: Option<SubtaskCount>,
 }
 
+#[derive(Serialize)]
 pub struct SubtaskCount {
     pub total: usize,
     pub done: usize,
