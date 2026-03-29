@@ -83,25 +83,40 @@ pub fn run(id: &str, root: &Path) -> Result<()> {
     let lines: Vec<&str> = content.lines().collect();
     let base_indent = indent_level(lines[line_idx]);
 
-    // Collect all lines to delete (task + its subtasks)
+    // Collect all lines to delete (task + its subtasks + description)
     let mut delete_indices: Vec<usize> = vec![line_idx];
     let mut i = line_idx + 1;
 
     while i < lines.len() {
         let line = lines[i];
+        let line_indent = indent_level(line);
+
+        // Empty line - could be before description or between sections
+        // Continue to check next line
+        if line.trim().is_empty() {
+            // Check if next line is part of this task (description or subtask)
+            if i + 1 < lines.len() {
+                let next = lines[i + 1];
+                let next_indent = indent_level(next);
+                // If next line is indented more than base (description or subtask), delete this empty line too
+                if next_indent > base_indent || (is_task_line(next) && next_indent > base_indent) {
+                    delete_indices.push(i);
+                }
+            }
+            i += 1;
+            continue;
+        }
+
         // Delete all deeper indented task lines (subtasks)
-        if is_task_line(line) && indent_level(line) > base_indent {
+        if is_task_line(line) && line_indent > base_indent {
             delete_indices.push(i);
             i += 1;
-        } else if line.trim().is_empty() && i + 1 < lines.len() && is_task_line(lines[i + 1]) && indent_level(lines[i + 1]) > base_indent {
-            // Empty line before subtask - delete it too
-            delete_indices.push(i);
-            i += 1;
-        } else if indent_level(line) > base_indent {
-            // Non-task content indented under task (like notes)
+        } else if line_indent > base_indent {
+            // Non-task content indented under task (like description)
             delete_indices.push(i);
             i += 1;
         } else {
+            // Not a subtask or description, stop
             break;
         }
     }

@@ -113,6 +113,15 @@ enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+    /// Delete a task from ROADMAP.md
+    Delete {
+        /// Task ID to delete (e.g., "1.1" or stable ID)
+        id: String,
+
+        /// Project root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
     /// Restore archived tasks from ARCHIVE.md back to ROADMAP.md
     Unarchive {
         /// Project root directory
@@ -232,6 +241,11 @@ fn main() -> Result<()> {
         }
         Commands::Archive { root, dry_run } => {
             archive::run(&root, dry_run)?;
+        }
+        Commands::Delete { id, root } => {
+            let graph = scan::run_cached(&root)?;
+            let canonical = resolve::resolve(&graph, &id)?;
+            delete::run(&canonical, &root)?;
         }
         Commands::Unarchive { root, task_id, dry_run } => {
             unarchive::run(&root, task_id.as_deref(), dry_run)?;

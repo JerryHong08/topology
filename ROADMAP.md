@@ -11,3 +11,5 @@ See [convention](.claude/skills/topology/CONVENTION.md) for markdown writing rul
 ## Open Issues
 
 - [ ] numeric id dedup
+  - [ ] 命令行添加删除任务触发dedup
+  - [ ] 手动修改原文件后也需要有一个方法dedup
