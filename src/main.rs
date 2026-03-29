@@ -1,6 +1,7 @@
 mod add;
 mod archive;
 mod context;
+mod dedup;
 mod delete;
 mod diff;
 mod graph;
@@ -121,6 +122,16 @@ enum Commands {
         /// Project root directory
         #[arg(long, default_value = ".")]
         root: PathBuf,
+    },
+    /// Renumber tasks to ensure unique sequential IDs
+    Dedup {
+        /// Project root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+
+        /// Preview what would be renumbered without writing
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Restore archived tasks from ARCHIVE.md back to ROADMAP.md
     Unarchive {
@@ -246,6 +257,9 @@ fn main() -> Result<()> {
             let graph = scan::run_cached(&root)?;
             let canonical = resolve::resolve(&graph, &id)?;
             delete::run(&canonical, &root)?;
+        }
+        Commands::Dedup { root, dry_run } => {
+            dedup::run(&root, dry_run)?;
         }
         Commands::Unarchive { root, task_id, dry_run } => {
             unarchive::run(&root, task_id.as_deref(), dry_run)?;

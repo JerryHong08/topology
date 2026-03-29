@@ -6,10 +6,10 @@ See [convention](.claude/skills/topology/CONVENTION.md) for markdown writing rul
 ## 6. Exploration
 
 - [ ] 6.1 Watch — re-scan on file change, emit diff stream
-- [ ] 6.5 独立于git的topo git like function, 用于里程碑归档以及支持branch分支进而基于不同roadmap variation版本的并行开发。
+- [ ] 6.2 独立于git的topo git like function, 用于里程碑归档以及支持branch分支进而基于不同roadmap variation版本的并行开发。
 
 ## Open Issues
 
 - [ ] numeric id dedup
-  - [ ] 命令行添加删除任务触发dedup
-  - [ ] 手动修改原文件后也需要有一个方法dedup
+  - [x] 命令行添加删除任务触发dedup
+  - [x] 手动修改原文件后也需要有一个方法dedup

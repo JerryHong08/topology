@@ -80,3 +80,4 @@
 - [x] query by default output tree format
 - [~] `diff --stat` needs more detail — what exactly should summary show?
 - [x] `topo query --status` output is json, not agent native. need to update.
+- [x] 删除任务不会删除其描述

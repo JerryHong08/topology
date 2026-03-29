@@ -1,10 +1,36 @@
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
 use crate::scan::markdown::{slugify, parse_markdown};
 use crate::graph::{Graph, NodeKind, EdgeKind};
+
+/// Collect all stable_ids from both ROADMAP.md and ARCHIVE.md
+fn collect_all_ids(root: &Path) -> HashSet<String> {
+    let mut ids = HashSet::new();
+
+    for filename in ["ROADMAP.md", "ARCHIVE.md"] {
+        let path = root.join(filename);
+        if !path.exists() {
+            continue;
+        }
+        if let Ok(content) = fs::read_to_string(&path) {
+            let mut graph = Graph::default();
+            parse_markdown(filename, &content, &mut graph, &mut Vec::new());
+            for node in &graph.nodes {
+                if node.kind == NodeKind::Task {
+                    if let Some(meta) = &node.metadata {
+                        if let Some(sid) = meta.get("stable_id").and_then(|v| v.as_str()) {
+                            ids.insert(sid.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ids
+}
 
 pub fn run(
     description: &str,
@@ -85,7 +111,9 @@ pub fn run(
         }
     }
 
-    // Generate new task ID
+    // Generate new task ID, ensuring uniqueness across ROADMAP.md and ARCHIVE.md
+    let all_ids = collect_all_ids(root);
+
     let new_task_id = if let Some(parent_id) = parent {
         // Find parent task to get its numeric ID
         let parent_node = graph
@@ -100,7 +128,7 @@ pub fn run(
             })
             .ok_or_else(|| anyhow::anyhow!("parent task {} not found", parent_id))?;
 
-        // Find max subtask number for this parent
+        // Find next available subtask number
         let mut max_subtask = 0u32;
         let empty_vec2 = Vec::new();
         let parent_children = children.get(&parent_node.id).unwrap_or(&empty_vec2);
@@ -123,9 +151,25 @@ pub fn run(
             }
         }
 
-        format!("{}.{}", parent_id, max_subtask + 1)
+        // Find next available ID that doesn't exist
+        let mut candidate = max_subtask + 1;
+        loop {
+            let id = format!("{}.{}", parent_id, candidate);
+            if !all_ids.contains(&id) {
+                break id;
+            }
+            candidate += 1;
+        }
     } else {
-        format!("{}.{}", section, max_task_num + 1)
+        // Find next available ID for this section
+        let mut candidate = max_task_num + 1;
+        loop {
+            let id = format!("{}.{}", section, candidate);
+            if !all_ids.contains(&id) {
+                break id;
+            }
+            candidate += 1;
+        }
     };
 
     // Create task line with optional description
