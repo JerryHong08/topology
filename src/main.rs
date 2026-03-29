@@ -4,6 +4,7 @@ mod context;
 mod delete;
 mod diff;
 mod graph;
+mod ops;
 mod output;
 mod query;
 mod resolve;
@@ -221,7 +222,13 @@ fn main() -> Result<()> {
             update::run(&canonical, &assignment, &root)?;
         }
         Commands::Add { description, section, discuss, parent, task_description, root } => {
-            add::run(&description, section, discuss, parent.as_deref(), task_description.as_deref(), &root)?;
+            let input = ops::AddTaskInput {
+                description,
+                section,
+                parent,
+                task_description,
+            };
+            add::run(&input.description, input.section, discuss, input.parent.as_deref(), input.task_description.as_deref(), &root)?;
         }
         Commands::Archive { root, dry_run } => {
             archive::run(&root, dry_run)?;

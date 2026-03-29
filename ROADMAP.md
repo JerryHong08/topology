@@ -10,10 +10,4 @@ See [convention](.claude/skills/topology/CONVENTION.md) for markdown writing rul
 
 ## Open Issues
 
-- [ ] 6.2 任务描述功能
-  - [ ] 设计 description metadata 格式
-  - [ ] 更新 scan/markdown.rs 解析描述
-  - [ ] 更新 Convention 文档
-  - [ ] topo add 支持 --description 参数
-  - [ ] 前端显示描述
 - [ ] numeric id dedup

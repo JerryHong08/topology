@@ -111,15 +111,8 @@ struct UpdateTaskRequest {
     status: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct AddTaskRequest {
-    description: String,
-    section: usize,
-    #[serde(default)]
-    parent: Option<String>,
-    #[serde(default)]
-    task_description: Option<String>,
-}
+// Re-export ops types for API use
+use crate::ops::AddTaskInput;
 
 #[derive(Deserialize)]
 struct UnarchiveRequest {
@@ -316,16 +309,13 @@ async fn update_task(
 
 async fn add_task(
     State(state): State<AppState>,
-    Json(body): Json<AddTaskRequest>,
+    Json(body): Json<AddTaskInput>,
 ) -> Json<ApiResponse> {
     let root = state.root.clone();
-    let description = body.description.clone();
-    let section = body.section;
-    let parent = body.parent.clone();
-    let task_description = body.task_description.clone();
+    let input = body.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        crate::add::run(&description, section, false, parent.as_deref(), task_description.as_deref(), &root)
+        crate::ops::add::run(&input, &root)
     }).await;
 
     match result {
