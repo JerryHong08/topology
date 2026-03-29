@@ -3,14 +3,15 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::scan::markdown::{make_id, slugify, parse_markdown};
-use crate::graph::{Graph, EdgeKind, NodeKind};
+use crate::scan::markdown::{slugify, parse_markdown};
+use crate::graph::{Graph, NodeKind, EdgeKind};
 
 pub fn run(
     description: &str,
     section: usize,
     discuss: bool,
     parent: Option<&str>,
+    task_description: Option<&str>,
     root: &Path,
 ) -> Result<()> {
     let roadmap_path = root.join("ROADMAP.md");
@@ -130,11 +131,16 @@ pub fn run(
         format!("{}.{}", section, max_task_num + 1)
     };
 
-    // Create task line
-    let task_line = if parent.is_some() {
-        format!("  - [ ] {} {}", new_task_id, description)
+    // Create task line with optional description
+    let indent = if parent.is_some() { "  " } else { "" };
+    let task_line = format!("{}- [ ] {} {}", indent, new_task_id, description);
+
+    // Add description line if provided (with blank line separator)
+    let task_lines = if let Some(desc) = task_description {
+        let desc_indent = if parent.is_some() { "    " } else { "  " };
+        format!("{}\n\n{}{}", task_line, desc_indent, desc)
     } else {
-        format!("- [ ] {} {}", new_task_id, description)
+        task_line
     };
 
     // Create detail doc if requested
@@ -233,13 +239,22 @@ Concrete implementation steps.
     let mut new_lines: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
 
     // Add detail doc link if created
-    let final_task_line = if let Some(ref doc_path) = detail_doc_path {
-        format!("- [ ] [{}]({}) {}", new_task_id, doc_path, description)
+    let final_task_lines = if let Some(ref doc_path) = detail_doc_path {
+        let base_line = format!("{}- [ ] [{}]({}) {}", indent, new_task_id, doc_path, description);
+        if let Some(desc) = task_description {
+            let desc_indent = if parent.is_some() { "    " } else { "  " };
+            format!("{}\n\n{}{}", base_line, desc_indent, desc)
+        } else {
+            base_line
+        }
     } else {
-        task_line
+        task_lines.clone()
     };
 
-    new_lines.insert(insert_idx, final_task_line);
+    // Insert task (may be multiple lines if description exists)
+    for line in final_task_lines.lines().rev() {
+        new_lines.insert(insert_idx, line.to_string());
+    }
 
     // Write back
     let mut output = new_lines.join("\n");

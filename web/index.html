@@ -93,6 +93,13 @@
       padding: 2px 4px;
     }
     .task-actions button:hover { color: #333; }
+    .task-description {
+      margin-left: 26px;
+      margin-top: 2px;
+      font-size: 0.9em;
+      color: #555;
+      line-height: 1.4;
+    }
     .subtasks { margin-left: 24px; }
     .done .task-label { color: #666; }
     .in-progress .task-label { color: #0066cc; }
@@ -199,12 +206,17 @@
       </div>
 
       <div class="add-form">
-        <input type="text" x-model="newTask.description" placeholder="任务描述" style="width: 300px;">
-        <select x-model="newTask.section">
-          <template x-for="s in roadmapSections" :key="s.id">
-            <option :value="s.sectionNum" x-text="s.label"></option>
-          </template>
-        </select>
+        <div style="margin-bottom: 8px;">
+          <input type="text" x-model="newTask.description" placeholder="任务标题" style="width: 300px;">
+          <select x-model="newTask.section">
+            <template x-for="s in roadmapSections" :key="s.id">
+              <option :value="s.sectionNum" x-text="s.label"></option>
+            </template>
+          </select>
+        </div>
+        <div style="margin-bottom: 8px;">
+          <input type="text" x-model="newTask.taskDescription" placeholder="任务描述（可选）" style="width: 500px;">
+        </div>
         <button @click="addTask()">添加任务</button>
       </div>
 
@@ -291,7 +303,7 @@
         loading: true,
         wsConnected: false,
         ws: null,
-        newTask: { description: '', section: 6 },
+        newTask: { description: '', section: 6, taskDescription: '' },
         activeTab: 'roadmap',
         selectedDoc: null,
 
@@ -461,7 +473,8 @@
             id: node.id,
             label: node.label,
             status: node.metadata?.status || 'todo',
-            stableId: node.metadata?.stable_id || ''
+            stableId: node.metadata?.stable_id || '',
+            description: node.metadata?.description || ''
           };
         },
 
@@ -472,6 +485,7 @@
             const checked = task.status === 'done' ? 'checked' : '';
             const statusClass = task.status || 'todo';
             const subtasksHtml = task.subtasks ? this.renderTasks(task.subtasks, depth + 1) : '';
+            const descHtml = task.description ? `<div class="task-description">${this.escapeHtml(task.description)}</div>` : '';
             return `
               <div class="task ${statusClass}" style="${indent}" data-task-id="${task.stableId || task.id}">
                 <input type="checkbox" class="task-checkbox" ${checked}>
@@ -483,6 +497,7 @@
                   <button data-action="delete" title="删除">✕</button>
                 </div>
               </div>
+              ${descHtml}
               ${subtasksHtml}
             `;
           }).join('');
@@ -494,6 +509,7 @@
           return tasks.map(task => {
             const statusClass = task.status || 'done';
             const subtasksHtml = task.subtasks ? this.renderArchiveTasks(task.subtasks, depth + 1) : '';
+            const descHtml = task.description ? `<div class="task-description">${this.escapeHtml(task.description)}</div>` : '';
             return `
               <div class="task ${statusClass}" style="${indent}" data-task-id="${task.stableId || task.id}">
                 <input type="checkbox" class="task-checkbox" checked disabled>
@@ -505,6 +521,7 @@
                   <button data-action="unarchive" title="恢复">↩</button>
                 </div>
               </div>
+              ${descHtml}
               ${subtasksHtml}
             `;
           }).join('');
@@ -596,7 +613,7 @@
         async addTask() {
           console.log('addTask() called', this.newTask);
           if (!this.newTask.description.trim()) {
-            alert('请输入任务描述');
+            alert('请输入任务标题');
             return;
           }
 
@@ -610,6 +627,7 @@
             console.log('addTask response:', data);
             if (data.success) {
               this.newTask.description = '';
+              this.newTask.taskDescription = '';
               // Refresh to show new task
               await this.fetchGraph();
               await this.fetchStatus();

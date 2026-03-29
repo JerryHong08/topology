@@ -6,11 +6,14 @@ See [convention](.claude/skills/topology/CONVENTION.md) for markdown writing rul
 ## 6. Exploration
 
 - [ ] 6.1 Watch — re-scan on file change, emit diff stream
+- [ ] 6.5 独立于git的topo git like function, 用于里程碑归档以及支持branch分支进而基于不同roadmap variation版本的并行开发。
 
 ## Open Issues
 
-- [ ] 每个任务允许添加简短描述区块
-  - [ ] task meta data框架
-  - [ ] convention更新
-  - [ ] topo cli更新
-  - [ ] add task 更新为对应task meta框架添加task
+- [ ] 6.2 任务描述功能
+  - [ ] 设计 description metadata 格式
+  - [ ] 更新 scan/markdown.rs 解析描述
+  - [ ] 更新 Convention 文档
+  - [ ] topo add 支持 --description 参数
+  - [ ] 前端显示描述
+- [ ] numeric id dedup

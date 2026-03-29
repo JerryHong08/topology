@@ -94,6 +94,10 @@ enum Commands {
         #[arg(long)]
         parent: Option<String>,
 
+        /// Task description text (displayed under task)
+        #[arg(long)]
+        task_description: Option<String>,
+
         /// Project root directory
         #[arg(long, default_value = ".")]
         root: PathBuf,
@@ -216,8 +220,8 @@ fn main() -> Result<()> {
             let canonical = resolve::resolve(&graph, &id)?;
             update::run(&canonical, &assignment, &root)?;
         }
-        Commands::Add { description, section, discuss, parent, root } => {
-            add::run(&description, section, discuss, parent.as_deref(), &root)?;
+        Commands::Add { description, section, discuss, parent, task_description, root } => {
+            add::run(&description, section, discuss, parent.as_deref(), task_description.as_deref(), &root)?;
         }
         Commands::Archive { root, dry_run } => {
             archive::run(&root, dry_run)?;

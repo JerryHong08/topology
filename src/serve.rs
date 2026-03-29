@@ -140,6 +140,8 @@ struct AddTaskRequest {
     section: usize,
     #[serde(default)]
     parent: Option<String>,
+    #[serde(default)]
+    task_description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -355,9 +357,10 @@ async fn add_task(
     let description = body.description.clone();
     let section = body.section;
     let parent = body.parent.clone();
+    let task_description = body.task_description.clone();
 
     let result = tokio::task::spawn_blocking(move || {
-        crate::add::run(&description, section, false, parent.as_deref(), &root)
+        crate::add::run(&description, section, false, parent.as_deref(), task_description.as_deref(), &root)
     }).await;
 
     match result {

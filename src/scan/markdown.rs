@@ -100,6 +100,7 @@ struct PendingTask {
     list_depth: usize,
     id: Option<String>,
     deferred_links: Vec<(String, String)>, // (target_url, source_file)
+    in_second_paragraph: bool, // Track if we're in a second paragraph (description)
 }
 
 /// Extract a numeric task ID prefix like "1.1" or "1.1.1" from the start of a label.
@@ -197,6 +198,15 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                 current_heading_level = heading_level_num(level);
                 heading_text.clear();
             }
+            Event::Start(Tag::Paragraph) => {
+                // If we're in a task and already have text, this is a new paragraph (description)
+                if let Some(top) = task_stack.last_mut() {
+                    if !top.text.is_empty() {
+                        top.in_second_paragraph = true;
+                        top.text.push_str("\n\n"); // Add paragraph separator
+                    }
+                }
+            }
             Event::End(TagEnd::Heading(_)) => {
                 in_heading = false;
                 let slug = slugify(&heading_text);
@@ -258,6 +268,7 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                     list_depth,
                     id: None,
                     deferred_links: Vec::new(),
+                    in_second_paragraph: false,
                 });
             }
             Event::End(TagEnd::Item)
@@ -268,10 +279,22 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                 let mut task = task_stack.pop().unwrap();
                 let raw_label = task.text.trim().to_string();
 
+                // Split label and description if task text has multiple paragraphs
+                // Description appears after paragraph break (double newline or single newline)
+                let (first_line, description) = if raw_label.contains("\n\n") {
+                    let parts: Vec<&str> = raw_label.splitn(2, "\n\n").collect();
+                    (parts[0].trim().to_string(), Some(parts[1].trim().to_string()))
+                } else if raw_label.contains('\n') {
+                    let parts: Vec<&str> = raw_label.splitn(2, '\n').collect();
+                    (parts[0].trim().to_string(), Some(parts[1].trim().to_string()))
+                } else {
+                    (raw_label, None)
+                };
+
                 // Extract numeric ID prefix if present (e.g. "1.1 Scan..." → id="1.1", label="Scan...")
-                let (stable_id, label) = match extract_numeric_id(&raw_label) {
+                let (stable_id, label) = match extract_numeric_id(&first_line) {
                     Some((nid, rest)) => (Some(nid.to_string()), rest.to_string()),
-                    None => (None, raw_label),
+                    None => (None, first_line),
                 };
 
                 let slug = slugify(&label);
@@ -299,6 +322,9 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                 let mut meta = serde_json::json!({"status": status});
                 if let Some(ref sid) = stable_id {
                     meta["stable_id"] = serde_json::json!(sid);
+                }
+                if let Some(ref desc) = description {
+                    meta["description"] = serde_json::json!(desc);
                 }
 
                 graph.nodes.push(Node {
@@ -471,8 +497,130 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                 }
                 in_list_item = false;
             }
+            Event::SoftBreak => {
+                // Add paragraph separator for task descriptions
+                if let Some(top) = task_stack.last_mut() {
+                    if list_depth == top.list_depth {
+                        top.text.push_str("\n\n");
+                    }
+                }
+            }
             _ => {}
         }
+    }
+
+    // Second pass: collect task descriptions
+    collect_task_descriptions(file_id, content, graph);
+}
+
+/// Collect task descriptions from markdown content.
+/// A description is non-task text indented under a task line.
+fn collect_task_descriptions(file_id: &str, content: &str, graph: &mut Graph) {
+    let lines: Vec<&str> = content.lines().collect();
+    let mut last_task: Option<(String, usize, String)> = None; // (stable_id, indent, task_id_in_graph)
+    let mut current_description: Option<(String, String)> = None; // (task_stable_id, description_lines)
+
+    for line in lines.iter() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+
+        // Check if this is a task line
+        if is_task_line(trimmed) {
+            // Finalize any pending description
+            if let Some((stable_id, desc)) = current_description.take() {
+                if !desc.trim().is_empty() {
+                    set_task_description_by_stable_id(graph, &stable_id, desc.trim());
+                }
+            }
+
+            // Parse task info
+            let after_marker = extract_task_text(trimmed);
+            let stable_id = match extract_numeric_id(after_marker) {
+                Some((nid, _)) => nid.to_string(),
+                None => continue, // Skip tasks without numeric ID
+            };
+
+            last_task = Some((stable_id.clone(), indent, stable_id));
+            current_description = None;
+            continue;
+        }
+
+        // Check for heading - ends description
+        if trimmed.starts_with("#") {
+            if let Some((stable_id, desc)) = current_description.take() {
+                if !desc.trim().is_empty() {
+                    set_task_description_by_stable_id(graph, &stable_id, desc.trim());
+                }
+            }
+            last_task = None;
+            current_description = None;
+            continue;
+        }
+
+        // Handle description lines
+        if let Some((last_stable_id, last_indent, _)) = &last_task {
+            // Empty line - allow it (description can have blank line before it)
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Check if this line is indented more than the task (potential description)
+            if indent > *last_indent {
+                if let Some((_, ref mut desc)) = current_description {
+                    // Continue existing description
+                    *desc = format!("{}\n{}", desc, trimmed);
+                } else {
+                    // Start new description
+                    current_description = Some((last_stable_id.clone(), trimmed.to_string()));
+                }
+            } else {
+                // Not indented under task - end description
+                if let Some((stable_id, desc)) = current_description.take() {
+                    if !desc.trim().is_empty() {
+                        set_task_description_by_stable_id(graph, &stable_id, desc.trim());
+                    }
+                }
+                current_description = None;
+            }
+        }
+    }
+
+    // Finalize any remaining description
+    if let Some((stable_id, desc)) = current_description {
+        if !desc.trim().is_empty() {
+            set_task_description_by_stable_id(graph, &stable_id, desc.trim());
+        }
+    }
+}
+
+fn set_task_description_by_stable_id(graph: &mut Graph, stable_id: &str, description: &str) {
+    if let Some(node) = graph.nodes.iter_mut().find(|n| {
+        n.metadata
+            .as_ref()
+            .and_then(|m| m.get("stable_id"))
+            .and_then(|v| v.as_str())
+            == Some(stable_id)
+    }) {
+        if let Some(ref mut meta) = node.metadata {
+            meta["description"] = serde_json::json!(description);
+        }
+    }
+}
+
+fn is_task_line(line: &str) -> bool {
+    line.starts_with("- [x] ")
+        || line.starts_with("- [X] ")
+        || line.starts_with("- [ ] ")
+        || line.starts_with("- [-] ")
+        || line.starts_with("- [~] ")
+}
+
+fn extract_task_text(line: &str) -> &str {
+    // Skip the checkbox marker "- [x] " or similar
+    if line.len() > 6 {
+        &line[6..]
+    } else {
+        line
     }
 }
 
