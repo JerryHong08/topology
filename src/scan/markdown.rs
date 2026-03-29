@@ -515,7 +515,7 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
 
 /// Collect task descriptions from markdown content.
 /// A description is non-task text indented under a task line.
-fn collect_task_descriptions(file_id: &str, content: &str, graph: &mut Graph) {
+fn collect_task_descriptions(_file_id: &str, content: &str, graph: &mut Graph) {
     let lines: Vec<&str> = content.lines().collect();
     let mut last_task: Option<(String, usize, String)> = None; // (stable_id, indent, task_id_in_graph)
     let mut current_description: Option<(String, String)> = None; // (task_stable_id, description_lines)

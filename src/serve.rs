@@ -30,29 +30,6 @@ struct AppState {
     ws_tx: broadcast::Sender<WsMessage>,
 }
 
-/// Filter graph to include ROADMAP.md, roadmap/*.md, and ARCHIVE.md
-fn filter_task_files(graph: &Graph) -> Graph {
-    let valid_ids: HashSet<&str> = graph.nodes.iter()
-        .filter(|n| {
-            n.id.starts_with("ROADMAP.md")
-            || n.id.starts_with("ARCHIVE.md")
-            || n.id.starts_with("roadmap/")
-        })
-        .map(|n| n.id.as_str())
-        .collect();
-
-    Graph {
-        nodes: graph.nodes.iter()
-            .filter(|n| valid_ids.contains(n.id.as_str()))
-            .cloned()
-            .collect(),
-        edges: graph.edges.iter()
-            .filter(|e| valid_ids.contains(e.source.as_str()) && valid_ids.contains(e.target.as_str()))
-            .cloned()
-            .collect(),
-    }
-}
-
 /// Filter to only ROADMAP.md
 fn filter_roadmap_only(graph: &Graph) -> Graph {
     let valid_ids: HashSet<&str> = graph.nodes.iter()
@@ -158,18 +135,6 @@ struct ApiResponse {
     error: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct ServeOptions {
-    #[serde(default)]
-    path: Option<String>,
-    #[serde(default = "default_port")]
-    port: u16,
-}
-
-fn default_port() -> u16 {
-    3000
-}
-
 pub async fn run(root: PathBuf, port: u16) -> Result<()> {
     // Initial graph
     let graph = scan::run_all(&root)?;
@@ -223,7 +188,7 @@ fn spawn_file_watcher(
     ws_tx: broadcast::Sender<WsMessage>,
 ) {
     tokio::spawn(async move {
-        use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
+        use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 
         let (tx, rx) = std::sync::mpsc::channel();
 

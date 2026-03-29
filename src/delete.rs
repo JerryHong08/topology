@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::graph::{Graph, NodeKind, EdgeKind};
+use crate::graph::{Graph, NodeKind};
 use crate::scan::markdown::{parse_markdown};
 
 fn is_task_line(line: &str) -> bool {

@@ -44,7 +44,6 @@ pub fn run(
 
     // Find existing tasks in this section to determine next ID
     let mut max_task_num = 0u32;
-    let mut has_subtasks = false;
 
     // Build parent-child relationships
     let mut children: HashMap<String, Vec<String>> = HashMap::new();
@@ -81,8 +80,6 @@ pub fn run(
                     if let Ok(num) = parts[1].parse::<u32>() {
                         max_task_num = max_task_num.max(num);
                     }
-                } else if parts.len() == 3 {
-                    has_subtasks = true;
                 }
             }
         }

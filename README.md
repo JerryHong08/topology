@@ -65,6 +65,12 @@ In the future I will introduce hooks and api endpoint which will enable human to
 
 ## File structure
 
+For every task:
+- task description
+- task status(task inbox/task section)
+- task id
+- (optional)task doc under roadmap/task.md
+
 ```
 ROADMAP.md              ← active tasks (hot)
 ARCHIVE.md              ← done/dropped tasks (cold)
