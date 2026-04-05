@@ -186,10 +186,12 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
     let mut current_heading_level: u8 = 0;
     let mut heading_text = String::new();
     let mut in_code_block = false;
-    let mut in_list_item = false;
-    let mut is_task_item = false; // true if TaskListMarker was seen for this item
-    let mut plain_item_text = String::new(); // accumulates text for non-task list items
-    let mut item_links: Vec<(String, String)> = Vec::new(); // deferred links for current list item
+    // Stacks for handling nested list items
+    let mut in_list_item_stack: Vec<bool> = Vec::new();
+    let mut is_task_item_stack: Vec<bool> = Vec::new(); // true if TaskListMarker was seen
+    let mut plain_item_text_stack: Vec<String> = Vec::new(); // accumulates text for non-task list items
+    let mut plain_item_complete_stack: Vec<bool> = Vec::new(); // true if paragraph break seen
+    let mut item_links_stack: Vec<Vec<(String, String)>> = Vec::new(); // deferred links per level
 
     for event in parser {
         match event {
@@ -204,6 +206,21 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                     if !top.text.is_empty() {
                         top.in_second_paragraph = true;
                         top.text.push_str("\n\n"); // Add paragraph separator
+                    }
+                }
+                // For plain list items (potential custom marker tasks), mark as complete
+                // when we see a paragraph break (description follows)
+                if let Some(&is_task) = is_task_item_stack.last() {
+                    if let Some(&in_list) = in_list_item_stack.last() {
+                        if in_list && !is_task {
+                            if let Some(text) = plain_item_text_stack.last() {
+                                if !text.is_empty() {
+                                    if let Some(complete) = plain_item_complete_stack.last_mut() {
+                                        *complete = true;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -255,13 +272,16 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                 list_depth -= 1;
             }
             Event::Start(Tag::Item) => {
-                in_list_item = true;
-                is_task_item = false;
-                plain_item_text.clear();
-                item_links.clear();
+                in_list_item_stack.push(true);
+                is_task_item_stack.push(false);
+                plain_item_text_stack.push(String::new());
+                plain_item_complete_stack.push(false);
+                item_links_stack.push(Vec::new());
             }
             Event::TaskListMarker(checked) => {
-                is_task_item = true;
+                if let Some(last) = is_task_item_stack.last_mut() {
+                    *last = true;
+                }
                 task_stack.push(PendingTask {
                     status: if checked { "done" } else { "todo" },
                     text: String::new(),
@@ -275,7 +295,6 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                 if !task_stack.is_empty()
                     && task_stack.last().unwrap().list_depth == list_depth =>
             {
-                in_list_item = false;
                 let mut task = task_stack.pop().unwrap();
                 let raw_label = task.text.trim().to_string();
 
@@ -326,6 +345,26 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                 if let Some(ref desc) = description {
                     meta["description"] = serde_json::json!(desc);
                 }
+                // Add section_id: the top-level H2 section this task belongs to
+                let section_id = heading_stack
+                    .iter()
+                    .find(|(lvl, _)| *lvl == 2)
+                    .map(|(_, id)| id.clone())
+                    .or_else(|| heading_stack.last().map(|(_, id)| id.clone()));
+                if let Some(sid) = section_id {
+                    // Extract section number from section_id (e.g., "ROADMAP.md#6-exploration" -> "6")
+                    if let Some(hash_pos) = sid.rfind('#') {
+                        let after_hash = &sid[hash_pos + 1..];
+                        // Extract leading digits/dots (section number like "6" or "8.1")
+                        let section_num: String = after_hash
+                            .chars()
+                            .take_while(|c| c.is_ascii_digit() || *c == '.')
+                            .collect();
+                        if !section_num.is_empty() {
+                            meta["section"] = serde_json::json!(section_num);
+                        }
+                    }
+                }
 
                 graph.nodes.push(Node {
                     id: task_id.clone(),
@@ -349,7 +388,7 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                 }
                 last_sibling.insert(parent_id, task_id.clone());
 
-                // Drain deferred links from both the task and item_links
+                // Drain deferred links from both the task and the current item level
                 for (target_url, source_file) in task.deferred_links.drain(..) {
                     links.push(RawLink {
                         source_node: task_id.clone(),
@@ -357,21 +396,32 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                         source_file,
                     });
                 }
-                for (target_url, source_file) in item_links.drain(..) {
-                    links.push(RawLink {
-                        source_node: task_id.clone(),
-                        target_url,
-                        source_file,
-                    });
+                // Get item_links from the current stack level (if any)
+                if let Some(item_links) = item_links_stack.last_mut() {
+                    for (target_url, source_file) in item_links.drain(..) {
+                        links.push(RawLink {
+                            source_node: task_id.clone(),
+                            target_url,
+                            source_file,
+                        });
+                    }
                 }
             }
             Event::Text(text) => {
                 if in_heading {
                     heading_text.push_str(&text);
                 } else if !in_code_block {
-                    if in_list_item && !is_task_item {
-                        // Accumulate text for potential custom marker detection
-                        plain_item_text.push_str(&text);
+                    // Check if we're in a plain list item (custom marker candidate)
+                    let is_custom_marker_candidate = {
+                        let in_list = in_list_item_stack.last().copied().unwrap_or(false);
+                        let is_task = is_task_item_stack.last().copied().unwrap_or(false);
+                        let complete = plain_item_complete_stack.last().copied().unwrap_or(false);
+                        in_list && !is_task && !complete
+                    };
+                    if is_custom_marker_candidate {
+                        if let Some(text_buf) = plain_item_text_stack.last_mut() {
+                            text_buf.push_str(&text);
+                        }
                     } else if let Some(top) = task_stack.last_mut() {
                         if list_depth == top.list_depth {
                             top.text.push_str(&text);
@@ -389,11 +439,12 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                         }
                     }
                     if looks_like_path(&code) {
-                        if in_list_item {
+                        let in_list = in_list_item_stack.last().copied().unwrap_or(false);
+                        if in_list {
                             if let Some(top) = task_stack.last_mut().filter(|t| t.list_depth == list_depth) {
                                 top.deferred_links.push((code.to_string(), file_id.to_string()));
-                            } else {
-                                item_links.push((code.to_string(), file_id.to_string()));
+                            } else if let Some(links) = item_links_stack.last_mut() {
+                                links.push((code.to_string(), file_id.to_string()));
                             }
                         } else {
                             let source_node = heading_stack
@@ -417,11 +468,12 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
                 if !in_code_block {
-                    if in_list_item {
+                    let in_list = in_list_item_stack.last().copied().unwrap_or(false);
+                    if in_list {
                         if let Some(top) = task_stack.last_mut().filter(|t| t.list_depth == list_depth) {
                             top.deferred_links.push((dest_url.to_string(), file_id.to_string()));
-                        } else {
-                            item_links.push((dest_url.to_string(), file_id.to_string()));
+                        } else if let Some(links) = item_links_stack.last_mut() {
+                            links.push((dest_url.to_string(), file_id.to_string()));
                         }
                     } else {
                         let source_node = heading_stack
@@ -437,18 +489,27 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                 }
             }
             Event::End(TagEnd::Item) => {
+                // Pop the current item state
+                let in_list = in_list_item_stack.pop().unwrap_or(false);
+                let is_task = is_task_item_stack.pop().unwrap_or(false);
+                let plain_text = plain_item_text_stack.pop().unwrap_or_default();
+                let _complete = plain_item_complete_stack.pop().unwrap_or(false);
+                let item_links = item_links_stack.pop().unwrap_or_default();
+
                 // Check if this non-task list item has a custom marker [-] or [~]
-                if in_list_item && !is_task_item && !plain_item_text.is_empty() {
-                    if let Some((marker, rest)) = extract_custom_marker(&plain_item_text) {
+                if in_list && !is_task && !plain_text.is_empty() {
+                    if let Some((marker, rest)) = extract_custom_marker(&plain_text) {
                         let status = match marker {
                             '-' => "in-progress",
                             '~' => "dropped",
                             _ => unreachable!(),
                         };
-                        let raw_label = rest.to_string();
-                        let (stable_id, label) = match extract_numeric_id(&raw_label) {
+                        // Split on newlines to separate label from description
+                        // plain_text may contain newlines from description lines
+                        let first_line = rest.lines().next().unwrap_or(rest).trim();
+                        let (stable_id, label) = match extract_numeric_id(first_line) {
                             Some((nid, remainder)) => (Some(nid.to_string()), remainder.to_string()),
-                            None => (None, raw_label),
+                            None => (None, first_line.to_string()),
                         };
                         let slug = slugify(&label);
                         let task_id = make_id(file_id, &slug, &mut slug_counts);
@@ -486,7 +547,7 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                         last_sibling.insert(parent_id, task_id.clone());
 
                         // Drain deferred item links
-                        for (target_url, source_file) in item_links.drain(..) {
+                        for (target_url, source_file) in item_links {
                             links.push(RawLink {
                                 source_node: task_id.clone(),
                                 target_url,
@@ -495,7 +556,6 @@ pub(crate) fn parse_markdown(file_id: &str, content: &str, graph: &mut Graph, li
                         }
                     }
                 }
-                in_list_item = false;
             }
             Event::SoftBreak => {
                 // Add paragraph separator for task descriptions
@@ -537,7 +597,13 @@ fn collect_task_descriptions(_file_id: &str, content: &str, graph: &mut Graph) {
             let after_marker = extract_task_text(trimmed);
             let stable_id = match extract_numeric_id(after_marker) {
                 Some((nid, _)) => nid.to_string(),
-                None => continue, // Skip tasks without numeric ID
+                None => {
+                    // Task without numeric ID (inbox item) - clear last_task
+                    // so subsequent description lines don't attach to wrong task
+                    last_task = None;
+                    current_description = None;
+                    continue;
+                }
             };
 
             last_task = Some((stable_id.clone(), indent, stable_id));
@@ -786,6 +852,28 @@ mod tests {
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].label, "Dropped task");
         assert_eq!(tasks[0].metadata.as_ref().unwrap()["status"], "dropped");
+    }
+
+    #[test]
+    fn custom_marker_chinese_label() {
+        // Test case from bug report: label should not be duplicated
+        let g = parse("# S\n- [-] 6.15 测试\n");
+        let tasks: Vec<_> = g.nodes.iter().filter(|n| n.kind == NodeKind::Task).collect();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].label, "测试", "label should not be duplicated");
+        assert_eq!(tasks[0].metadata.as_ref().unwrap()["status"], "in-progress");
+        assert_eq!(tasks[0].metadata.as_ref().unwrap()["stable_id"], "6.15");
+    }
+
+    #[test]
+    fn custom_marker_single_char_label() {
+        // Test case: single char label after numeric ID
+        let g = parse("# S\n- [-] 6.14 1\n");
+        let tasks: Vec<_> = g.nodes.iter().filter(|n| n.kind == NodeKind::Task).collect();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].label, "1", "label should be '1', not '11'");
+        assert_eq!(tasks[0].metadata.as_ref().unwrap()["status"], "in-progress");
+        assert_eq!(tasks[0].metadata.as_ref().unwrap()["stable_id"], "6.14");
     }
 
     #[test]
