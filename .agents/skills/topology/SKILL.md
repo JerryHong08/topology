@@ -74,6 +74,7 @@ topo context <ID>                      # task details + linked docs
 topo update <ID> status=in-progress    # claim task
 topo update <ID> status=done           # complete task
 topo archive                           # clean up done/dropped
+topo archive --fix                     # auto-fix ID conflicts if any
 topo scan .                            # refresh graph (when cache stale)
 ```
 
@@ -124,6 +125,13 @@ topo context 1.3          # numeric ID (preferred)
 topo context scan         # slug
 ```
 
+**ID uniqueness is enforced:**
+- `topo add` checks both ROADMAP.md and ARCHIVE.md when assigning IDs — no duplicates
+- If a numeric ID exists in both files (e.g. from manual edit), resolver prefers ROADMAP.md
+- `topo archive` detects ID conflicts with ARCHIVE.md:
+  - Without `--fix`: errors with conflict details
+  - With `--fix`: auto-appends `.0` suffix to conflicting archived IDs (e.g. `9.6` → `9.6.0`)
+
 ### Task statuses
 
 | Markdown | Status | Update command |
@@ -148,6 +156,8 @@ topo context scan         # slug
 | `topo update <ID> status=<S> --link <doc>` | Change status and link detail doc |
 | `topo delete <ID>` | Remove task |
 | `topo archive` | Archive done/dropped |
+| `topo archive --fix` | Archive with auto-fix for ID conflicts |
+| `topo dedup` | Renumber tasks to ensure unique IDs |
 | `topo unarchive <ID>` | Restore from archive |
 | `topo scan .` | Refresh graph |
 | `topo section add "Title" [--number N] [--after M]` | Add section |
