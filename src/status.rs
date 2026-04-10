@@ -26,6 +26,7 @@ pub struct Stage {
 #[derive(Serialize)]
 pub struct TaskSummary {
     pub id: String,
+    pub stable_id: Option<String>,
     pub label: String,
     pub status: String,
     pub subtasks: Option<SubtaskCount>,
@@ -74,10 +75,11 @@ pub fn run(roadmap_path: &Path) -> Result<()> {
                 "dropped" => "[~]",
                 _ => "[ ]",
             };
+            let prefix = task.stable_id.as_deref().map(|sid| format!("{} ", sid)).unwrap_or_default();
             if let Some(sub) = &task.subtasks {
-                println!("  {} {} {}/{} subtasks", marker, task.label, sub.done, sub.total);
+                println!("  {} {}{}/{} subtasks", marker, prefix, sub.done, sub.total);
             } else {
-                println!("  {} {}", marker, task.label);
+                println!("  {} {}{}", marker, prefix, task.label);
             }
         }
         println!();
@@ -186,8 +188,16 @@ pub fn build(graph: &Graph) -> StatusOutput {
                 )
             };
 
+            let stable_id = task
+                .metadata
+                .as_ref()
+                .and_then(|m| m.get("stable_id"))
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+
             stage_tasks.push(TaskSummary {
                 id: task.id.clone(),
+                stable_id,
                 label: task.label.clone(),
                 status,
                 subtasks,

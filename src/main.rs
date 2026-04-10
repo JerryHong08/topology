@@ -1,13 +1,17 @@
 mod add;
+mod add_section;
 mod archive;
 mod context;
 mod dedup;
 mod delete;
 mod diff;
 mod graph;
+mod layout;
+mod move_section;
 mod ops;
 mod output;
 mod query;
+mod rename_section;
 mod resolve;
 mod scan;
 mod serve;
@@ -73,7 +77,11 @@ enum Commands {
         id: String,
 
         /// Field assignment (e.g. "status=done")
-        assignment: String,
+        assignment: Option<String>,
+
+        /// Link to detail document (e.g. "roadmap/slug.md")
+        #[arg(long)]
+        link: Option<String>,
 
         /// Project root directory
         #[arg(long, default_value = ".")]
@@ -81,12 +89,12 @@ enum Commands {
     },
     /// Add a new task to ROADMAP.md
     Add {
-        /// Task description
+        /// Task description (can include ID prefix like "9.12 Task description")
         description: String,
 
-        /// Section number to add task to (e.g., 1, 2, 3)
+        /// Section number to add task to (auto-detected if description has ID prefix)
         #[arg(long)]
-        section: usize,
+        section: Option<usize>,
 
         /// Create detail doc for discussion
         #[arg(long)]
@@ -207,6 +215,57 @@ enum Commands {
         #[arg(long, default_value = "7777")]
         port: u16,
     },
+    /// Section management commands
+    Section {
+        #[command(subcommand)]
+        command: SectionCommands,
+    },
+}
+
+#[derive(Subcommand)]
+enum SectionCommands {
+    /// Add a new section to ROADMAP.md
+    Add {
+        /// Section title
+        title: String,
+
+        /// Section number (optional, auto-assigned if not specified)
+        #[arg(long)]
+        number: Option<usize>,
+
+        /// Insert after this section number
+        #[arg(long)]
+        after: Option<usize>,
+
+        /// Project root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
+    /// Rename a section
+    Rename {
+        /// Section number to rename
+        number: usize,
+
+        /// New title for the section
+        title: String,
+
+        /// Project root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
+    /// Move a section to a new position
+    Move {
+        /// Section number to move
+        number: usize,
+
+        /// Move after this section number
+        #[arg(long)]
+        after: usize,
+
+        /// Project root directory
+        #[arg(long, default_value = ".")]
+        root: PathBuf,
+    },
 }
 
 fn main() -> Result<()> {
@@ -236,19 +295,13 @@ fn main() -> Result<()> {
                 diff::run(&path)?;
             }
         }
-        Commands::Update { id, assignment, root } => {
+        Commands::Update { id, assignment, link, root } => {
             let graph = scan::run_cached(&root)?;
             let canonical = resolve::resolve(&graph, &id)?;
-            update::run(&canonical, &assignment, &root)?;
+            update::run(&canonical, assignment.as_deref(), link.as_deref(), &root)?;
         }
         Commands::Add { description, section, discuss, parent, task_description, root } => {
-            let input = ops::AddTaskInput {
-                description,
-                section,
-                parent,
-                task_description,
-            };
-            add::run(&input.description, input.section, discuss, input.parent.as_deref(), input.task_description.as_deref(), &root)?;
+            add::run(&description, section, discuss, parent.as_deref(), task_description.as_deref(), &root)?;
         }
         Commands::Archive { root, dry_run } => {
             archive::run(&root, dry_run)?;
@@ -297,10 +350,11 @@ fn main() -> Result<()> {
                             "dropped" => "[~]",
                             _ => "[ ]",
                         };
+                        let prefix = task.stable_id.as_deref().map(|sid| format!("{} ", sid)).unwrap_or_default();
                         if let Some(sub) = &task.subtasks {
-                            println!("  {} {} {}/{} subtasks", marker, task.label, sub.done, sub.total);
+                            println!("  {} {}{}/{} subtasks", marker, prefix, sub.done, sub.total);
                         } else {
-                            println!("  {} {}", marker, task.label);
+                            println!("  {} {}{}", marker, prefix, task.label);
                         }
                     }
                     println!();
@@ -344,6 +398,29 @@ fn main() -> Result<()> {
             tokio::runtime::Runtime::new()
                 .expect("failed to create tokio runtime")
                 .block_on(serve::run(root, port))?;
+        }
+        Commands::Section { command } => {
+            match command {
+                SectionCommands::Add { title, number, after, root } => {
+                    let input = ops::AddSectionInput {
+                        title,
+                        section_number: number,
+                        after,
+                    };
+                    let id = add_section::run(&input, &root)?;
+                    println!("created section {}", id);
+                }
+                SectionCommands::Rename { number, title, root } => {
+                    let input = ops::UpdateSectionInput { title };
+                    rename_section::run(number, &input, &root)?;
+                    println!("renamed section {} → {}", number, input.title);
+                }
+                SectionCommands::Move { number, after, root } => {
+                    let input = ops::MoveSectionInput { after };
+                    move_section::run(number, &input, &root)?;
+                    println!("moved section {} → after {}", number, after);
+                }
+            }
         }
     }
     Ok(())

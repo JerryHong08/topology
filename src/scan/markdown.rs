@@ -22,11 +22,16 @@ impl MarkdownScanner {
         // Create a gitignore matcher for filtering
         let gitignore = ignore::gitignore::Gitignore::new(root.join(".gitignore")).0;
 
-        for entry in ignore::WalkBuilder::new(&root)
-            .hidden(false)
-            .filter_entry(|e| e.file_name() != ".git")
-            .build()
-        {
+        // Disable WalkBuilder's gitignore — we handle it ourselves with
+        // special-case exceptions for ROADMAP.md and roadmap/ (which users
+        // commonly gitignore but topo must still read).
+        let mut builder = ignore::WalkBuilder::new(&root);
+        builder.hidden(false);
+        builder.git_ignore(false);
+        builder.git_global(false);
+        builder.git_exclude(false);
+
+        for entry in builder.filter_entry(|e| e.file_name() != ".git").build() {
             let entry = entry?;
             let abs = entry.path();
             if !abs.is_file() {
