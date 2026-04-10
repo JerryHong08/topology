@@ -107,7 +107,7 @@ struct GraphData {
 }
 
 // Re-export ops types for API use
-use crate::ops::{AddTaskInput, UpdateTaskInput, UnarchiveInput};
+use crate::ops::{AddTaskInput, UpdateTaskInput, UnarchiveInput, PromoteInput};
 
 #[derive(Serialize)]
 struct ApiResponse {
@@ -126,16 +126,16 @@ pub async fn run(root: PathBuf, port: u16) -> Result<()> {
     // WebSocket broadcast channel
     let (ws_tx, _) = broadcast::channel::<WsMessage>(16);
 
-    // Start file watcher
+    // Start file watcher - DISABLED
     let state = AppState {
         root: root.clone(),
         graph: graph.clone(),
         ws_tx: ws_tx.clone(),
     };
-    spawn_file_watcher(root.clone(), graph.clone(), ws_tx.clone());
+    // spawn_file_watcher(root.clone(), graph.clone(), ws_tx.clone());
 
     // Build router
-    let web_dir = root.join("web");
+    let web_dist_dir = root.join("web/dist");
     let app = Router::new()
         // API routes
         .route("/api/graph", get(get_graph))
@@ -146,13 +146,17 @@ pub async fn run(root: PathBuf, port: u16) -> Result<()> {
         .route("/api/tasks", post(add_task))
         .route("/api/archive", post(archive_tasks))
         .route("/api/unarchive", post(unarchive_tasks))
+        .route("/api/promote", post(promote_task))
         .route("/api/scan", post(rescan))
+        // Layout API
+        .route("/api/layout", get(get_layout))
+        .route("/api/layout", post(update_layout))
         // WebSocket
         .route("/ws", get(ws_handler))
-        // Index page
-        .route("/", get(index_handler))
-        // Static files from project root (for roadmap/*.md, ARCHIVE.md, etc.)
-        .fallback_service(ServeDir::new(root.clone()).fallback(ServeDir::new(&web_dir)))
+        // Serve roadmap/*.md files
+        .nest_service("/roadmap", ServeDir::new(root.join("roadmap")))
+        // Static files from web/dist
+        .fallback_service(ServeDir::new(&web_dist_dir))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -261,31 +265,22 @@ async fn update_task(
     State(state): State<AppState>,
     Json(body): Json<UpdateTaskInput>,
 ) -> Json<ApiResponse> {
-    // Resolve ID
     let graph = state.graph.read().await;
     let canonical = crate::resolve::resolve(&graph, &id);
+    drop(graph);
 
     match canonical {
         Ok(canonical_id) => {
-            // Run update in blocking context
             let root = state.root.clone();
             let input = body.clone();
-            let id_for_response = id.clone();
-            let status_for_ws = body.status.clone();
             let result = tokio::task::spawn_blocking(move || {
                 crate::ops::update::run(&canonical_id, &input, &root)
             }).await;
 
             match result {
                 Ok(Ok(_)) => {
-                    // Broadcast update
-                    let _ = state.ws_tx.send(WsMessage {
-                        msg_type: "task_updated".into(),
-                        data: None,
-                        id: Some(id_for_response.clone()),
-                        status: status_for_ws.clone(),
-                    });
-                    Json(ApiResponse { success: true, id: Some(id_for_response), error: None })
+                    broadcast_graph(&state).await;
+                    Json(ApiResponse { success: true, id: Some(id), error: None })
                 }
                 Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
                 Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
@@ -308,12 +303,7 @@ async fn add_task(
 
     match result {
         Ok(Ok(_)) => {
-            let _ = state.ws_tx.send(WsMessage {
-                msg_type: "graph_update".into(),
-                data: None, // Will trigger client to fetch new graph
-                id: None,
-                status: None,
-            });
+            broadcast_graph(&state).await;
             Json(ApiResponse { success: true, id: None, error: None })
         }
         Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
@@ -325,7 +315,6 @@ async fn delete_task(
     Path(id): Path<String>,
     State(state): State<AppState>,
 ) -> Json<ApiResponse> {
-    // Resolve ID
     let graph = state.graph.read().await;
     let canonical = crate::resolve::resolve(&graph, &id);
     drop(graph);
@@ -333,20 +322,14 @@ async fn delete_task(
     match canonical {
         Ok(canonical_id) => {
             let root = state.root.clone();
-            let id_for_response = id.clone();
             let result = tokio::task::spawn_blocking(move || {
                 crate::ops::delete::run(&canonical_id, &root)
             }).await;
 
             match result {
                 Ok(Ok(_)) => {
-                    let _ = state.ws_tx.send(WsMessage {
-                        msg_type: "task_deleted".into(),
-                        data: None,
-                        id: Some(id_for_response.clone()),
-                        status: None,
-                    });
-                    Json(ApiResponse { success: true, id: Some(id_for_response), error: None })
+                    broadcast_graph(&state).await;
+                    Json(ApiResponse { success: true, id: Some(id), error: None })
                 }
                 Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
                 Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
@@ -359,17 +342,12 @@ async fn delete_task(
 async fn archive_tasks(State(state): State<AppState>) -> Json<ApiResponse> {
     let root = state.root.clone();
     let result = tokio::task::spawn_blocking(move || {
-        crate::ops::archive::run(&root, false)
+        crate::ops::archive::run(&root, false, false)
     }).await;
 
     match result {
         Ok(Ok(_)) => {
-            let _ = state.ws_tx.send(WsMessage {
-                msg_type: "graph_update".into(),
-                data: None,
-                id: None,
-                status: None,
-            });
+            broadcast_graph(&state).await;
             Json(ApiResponse { success: true, id: None, error: None })
         }
         Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
@@ -389,13 +367,28 @@ async fn unarchive_tasks(
 
     match result {
         Ok(Ok(_)) => {
-            let _ = state.ws_tx.send(WsMessage {
-                msg_type: "graph_update".into(),
-                data: None,
-                id: None,
-                status: None,
-            });
+            broadcast_graph(&state).await;
             Json(ApiResponse { success: true, id: None, error: None })
+        }
+        Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
+        Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
+    }
+}
+
+async fn promote_task(
+    State(state): State<AppState>,
+    Json(body): Json<PromoteInput>,
+) -> Json<ApiResponse> {
+    let root = state.root.clone();
+    let input = body.clone();
+    let result = tokio::task::spawn_blocking(move || {
+        crate::ops::promote::run(&input, &root)
+    }).await;
+
+    match result {
+        Ok(Ok(new_id)) => {
+            broadcast_graph(&state).await;
+            Json(ApiResponse { success: true, id: Some(new_id), error: None })
         }
         Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
         Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
@@ -414,19 +407,75 @@ async fn rescan(State(state): State<AppState>) -> Json<ApiResponse> {
                 let mut g = state.graph.write().await;
                 *g = new_graph.clone();
             }
-            let data = GraphData {
-                roadmap: filter_roadmap_only(&new_graph),
-                archive: filter_archive_only(&new_graph),
-                docs: filter_roadmap_docs_only(&new_graph),
-            };
-            let _ = state.ws_tx.send(WsMessage {
-                msg_type: "graph_update".into(),
-                data: Some(serde_json::to_value(&data).unwrap()),
-                id: None,
-                status: None,
-            });
+            broadcast_graph(&state).await;
             Json(ApiResponse { success: true, id: None, error: None })
         }
+        Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
+        Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
+    }
+}
+
+async fn broadcast_graph(state: &AppState) {
+    if let Ok(new_graph) = scan::run_all(&state.root) {
+        {
+            let mut g = state.graph.write().await;
+            *g = new_graph.clone();
+        }
+        let data = GraphData {
+            roadmap: filter_roadmap_only(&new_graph),
+            archive: filter_archive_only(&new_graph),
+            docs: filter_roadmap_docs_only(&new_graph),
+        };
+        let _ = state.ws_tx.send(WsMessage {
+            msg_type: "graph_update".into(),
+            data: Some(serde_json::to_value(&data).unwrap()),
+            id: None,
+            status: None,
+        });
+    }
+}
+
+// Layout API handlers
+
+async fn get_layout(State(state): State<AppState>) -> Json<crate::layout::LayoutData> {
+    let root = state.root.clone();
+    let layout = tokio::task::spawn_blocking(move || {
+        crate::layout::LayoutData::load(&root).unwrap_or_default()
+    }).await.unwrap_or_default();
+
+    Json(layout)
+}
+
+#[derive(Deserialize)]
+struct UpdateLayoutInput {
+    nodes: Option<std::collections::HashMap<String, crate::layout::NodeLayout>>,
+    viewport: Option<crate::layout::Viewport>,
+}
+
+async fn update_layout(
+    State(state): State<AppState>,
+    Json(body): Json<UpdateLayoutInput>,
+) -> Json<ApiResponse> {
+    let root = state.root.clone();
+
+    let result = tokio::task::spawn_blocking(move || {
+        let mut layout = crate::layout::LayoutData::load(&root).unwrap_or_default();
+
+        if let Some(nodes) = body.nodes {
+            for (id, node_layout) in nodes {
+                layout.set_node(id, node_layout);
+            }
+        }
+
+        if let Some(viewport) = body.viewport {
+            layout.viewport = viewport;
+        }
+
+        layout.save(&root)
+    }).await;
+
+    match result {
+        Ok(Ok(())) => Json(ApiResponse { success: true, id: None, error: None }),
         Ok(Err(e)) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
         Err(e) => Json(ApiResponse { success: false, id: None, error: Some(e.to_string()) }),
     }

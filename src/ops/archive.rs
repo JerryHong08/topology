@@ -1,6 +1,9 @@
-use anyhow::Result;
-use std::collections::BTreeMap;
+use anyhow::{bail, Result};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
+
+use crate::scan::markdown::{extract_numeric_id, parse_markdown};
+use crate::graph::Graph;
 
 fn is_task_line(line: &str) -> bool {
     let t = line.trim_start();
@@ -73,9 +76,39 @@ fn collect_blocks(lines: &[&str]) -> Vec<Block> {
     blocks
 }
 
+/// Extract numeric ID from a task line like "- [x] 9.6 Some task"
+fn extract_line_id(line: &str) -> Option<String> {
+    let t = line.trim_start();
+    // Skip past checkbox marker "- [x] " or "- [ ] " etc
+    let after_marker = if t.starts_with("- [") && t.len() > 6 {
+        &t[6..]
+    } else {
+        return None;
+    };
+    extract_numeric_id(after_marker.trim_start()).map(|(id, _)| id.to_string())
+}
+
+/// Collect all stable_ids from ARCHIVE.md
+fn collect_archive_ids(archive_path: &Path) -> HashSet<String> {
+    let mut ids = HashSet::new();
+    let Ok(content) = std::fs::read_to_string(archive_path) else {
+        return ids;
+    };
+    let mut graph = Graph::default();
+    parse_markdown("ARCHIVE.md", &content, &mut graph, &mut Vec::new());
+    for node in &graph.nodes {
+        if let Some(meta) = &node.metadata {
+            if let Some(sid) = meta.get("stable_id").and_then(|v| v.as_str()) {
+                ids.insert(sid.to_string());
+            }
+        }
+    }
+    ids
+}
+
 /// Archive done/dropped tasks from ROADMAP.md to ARCHIVE.md
 /// Core operation used by both CLI and API
-pub fn run(root: &Path, dry_run: bool) -> Result<usize> {
+pub fn run(root: &Path, dry_run: bool, fix: bool) -> Result<usize> {
     let roadmap_path = root.join("ROADMAP.md");
     let content = std::fs::read_to_string(&roadmap_path)
         .map_err(|_| anyhow::anyhow!("cannot read {}", roadmap_path.display()))?;
@@ -131,6 +164,51 @@ pub fn run(root: &Path, dry_run: bool) -> Result<usize> {
 
     if archived.is_empty() {
         return Ok(0);
+    }
+
+    // Detect ID conflicts with existing ARCHIVE.md
+    let archive_path = root.join("ARCHIVE.md");
+    let existing_archive_ids = collect_archive_ids(&archive_path);
+
+    let mut conflicts: Vec<String> = Vec::new();
+    for (section, (_, blocks)) in &archived {
+        for block in blocks {
+            for line in block {
+                if let Some(id) = extract_line_id(line) {
+                    if existing_archive_ids.contains(&id) {
+                        conflicts.push(id);
+                    }
+                }
+            }
+        }
+    }
+
+    if !conflicts.is_empty() {
+        let conflict_ids: HashSet<String> = conflicts.into_iter().collect();
+        let conflict_list: Vec<String> = conflict_ids.into_iter().collect();
+        if !fix {
+            bail!(
+                "ID conflict: ARCHIVE.md already contains {}. Re-run with --fix to auto-resolve by appending suffix.",
+                conflict_list.join(", ")
+            );
+        }
+        // Fix: append ".0" suffix to conflicting IDs in archived blocks
+        for (_, (_, blocks)) in archived.iter_mut() {
+            for block in blocks {
+                for line in block.iter_mut() {
+                    for id in &conflict_list {
+                        if let Some(line_id) = extract_line_id(line) {
+                            if line_id == *id {
+                                let old = format!("{} ", id);
+                                let new = format!("{}.0 ", id);
+                                *line = line.replace(&old, &new);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        eprintln!("Fixed {} conflicting ID(s) by appending .0 suffix", conflict_list.len());
     }
 
     if dry_run {

@@ -7,8 +7,8 @@ use std::path::Path;
 use crate::ops;
 
 /// Archive done/dropped tasks from ROADMAP.md to ARCHIVE.md
-pub fn run(root: &Path, dry_run: bool) -> Result<()> {
-    let count = ops::archive::run(root, dry_run)?;
+pub fn run(root: &Path, dry_run: bool, fix: bool) -> Result<()> {
+    let count = ops::archive::run(root, dry_run, fix)?;
 
     if count == 0 {
         println!("nothing to archive");
@@ -44,7 +44,7 @@ mod tests {
         )
         .unwrap();
 
-        run(&dir, false).unwrap();
+        run(&dir, false, false).unwrap();
 
         let roadmap = std::fs::read_to_string(dir.join("ROADMAP.md")).unwrap();
         assert!(!roadmap.contains("1.1 Scan"));
@@ -65,7 +65,7 @@ mod tests {
         )
         .unwrap();
 
-        run(&dir, false).unwrap();
+        run(&dir, false, false).unwrap();
 
         let roadmap = std::fs::read_to_string(dir.join("ROADMAP.md")).unwrap();
         assert!(roadmap.contains("Parent"));
@@ -82,7 +82,7 @@ mod tests {
         )
         .unwrap();
 
-        run(&dir, false).unwrap();
+        run(&dir, false, false).unwrap();
 
         let roadmap = std::fs::read_to_string(dir.join("ROADMAP.md")).unwrap();
         assert!(!roadmap.contains("Dropped task"));
@@ -102,7 +102,7 @@ mod tests {
         )
         .unwrap();
 
-        run(&dir, false).unwrap();
+        run(&dir, false, false).unwrap();
 
         let roadmap = std::fs::read_to_string(dir.join("ROADMAP.md")).unwrap();
         assert!(roadmap.contains("Todo"));
@@ -116,7 +116,7 @@ mod tests {
         let original = "# R\n\n## S\n\n- [x] Done task\n- [ ] Todo\n";
         std::fs::write(dir.join("ROADMAP.md"), original).unwrap();
 
-        run(&dir, true).unwrap();
+        run(&dir, true, false).unwrap();
 
         let roadmap = std::fs::read_to_string(dir.join("ROADMAP.md")).unwrap();
         assert_eq!(roadmap, original);
@@ -138,11 +138,49 @@ mod tests {
         )
         .unwrap();
 
-        run(&dir, false).unwrap();
+        run(&dir, false, false).unwrap();
 
         let archive = std::fs::read_to_string(dir.join("ARCHIVE.md")).unwrap();
         assert!(archive.contains("Old task"));
         assert!(archive.contains("New task"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conflict_without_fix_errors() {
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("ARCHIVE.md"),
+            "# Archive\n\n## 1. Core\n- [x] 1.1 Old task\n",
+        ).unwrap();
+        std::fs::write(
+            dir.join("ROADMAP.md"),
+            "# R\n\n## 1. Core\n\n- [x] 1.1 New task\n",
+        ).unwrap();
+
+        let err = run(&dir, false, false).unwrap_err();
+        assert!(err.to_string().contains("ID conflict"));
+        assert!(err.to_string().contains("--fix"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn conflict_with_fix_resolves() {
+        let dir = temp_dir();
+        std::fs::write(
+            dir.join("ARCHIVE.md"),
+            "# Archive\n\n## 1. Core\n- [x] 1.1 Old task\n",
+        ).unwrap();
+        std::fs::write(
+            dir.join("ROADMAP.md"),
+            "# R\n\n## 1. Core\n\n- [x] 1.1 New task\n",
+        ).unwrap();
+
+        run(&dir, false, true).unwrap();
+
+        let archive = std::fs::read_to_string(dir.join("ARCHIVE.md")).unwrap();
+        assert!(archive.contains("1.1 Old task"));
+        assert!(archive.contains("1.1.0 New task"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

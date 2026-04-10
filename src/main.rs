@@ -121,6 +121,10 @@ enum Commands {
         /// Preview what would be archived without writing
         #[arg(long)]
         dry_run: bool,
+
+        /// Auto-fix ID conflicts by appending suffix to archived duplicates
+        #[arg(long)]
+        fix: bool,
     },
     /// Delete a task from ROADMAP.md
     Delete {
@@ -303,8 +307,8 @@ fn main() -> Result<()> {
         Commands::Add { description, section, discuss, parent, task_description, root } => {
             add::run(&description, section, discuss, parent.as_deref(), task_description.as_deref(), &root)?;
         }
-        Commands::Archive { root, dry_run } => {
-            archive::run(&root, dry_run)?;
+        Commands::Archive { root, dry_run, fix } => {
+            archive::run(&root, dry_run, fix)?;
         }
         Commands::Delete { id, root } => {
             let graph = scan::run_cached(&root)?;

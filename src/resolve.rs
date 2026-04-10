@@ -25,14 +25,23 @@ pub fn resolve(graph: &Graph, input: &str) -> Result<String> {
         .map(|n| n.id.as_str())
         .collect();
     match numeric_matches.len() {
-        1 => return Ok(numeric_matches[0].to_string()),
-        n if n > 1 => bail!(
-            "ambiguous numeric ID '{}', matches {} nodes:\n  {}",
-            input,
-            n,
-            numeric_matches.join("\n  ")
-        ),
-        _ => {}
+        0 => {}
+        // Prefer ROADMAP.md over other files (e.g. ARCHIVE.md)
+        _ => {
+            let preferred = numeric_matches.iter().find(|id| id.starts_with("ROADMAP.md"));
+            if let Some(id) = preferred {
+                return Ok(id.to_string());
+            }
+            if numeric_matches.len() == 1 {
+                return Ok(numeric_matches[0].to_string());
+            }
+            bail!(
+                "ambiguous numeric ID '{}', matches {} nodes:\n  {}",
+                input,
+                numeric_matches.len(),
+                numeric_matches.join("\n  ")
+            );
+        }
     }
 
     // 3. Unique prefix match on full ID
@@ -203,6 +212,16 @@ mod tests {
             "ROADMAP.md#scan-project-files"
         );
         assert_eq!(resolve(&g, "1.3").unwrap(), "ROADMAP.md#stable-id");
+    }
+
+    #[test]
+    fn resolve_numeric_id_prefers_roadmap_over_archive() {
+        let g = make_graph_with_stable_ids(&[
+            ("ROADMAP.md#active-task", Some("9.6")),
+            ("ARCHIVE.md#archived-task", Some("9.6")),
+        ]);
+        // Should resolve to ROADMAP.md, not ARCHIVE.md
+        assert_eq!(resolve(&g, "9.6").unwrap(), "ROADMAP.md#active-task");
     }
 
     #[test]
