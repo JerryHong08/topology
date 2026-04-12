@@ -65,7 +65,7 @@ pub fn print(output: &StatusOutput) {
 
     for stage in &output.stages {
         if stage.total == 0 {
-            continue;
+            continue; // skip empty sections
         }
         let pct = if stage.total > 0 {
             (stage.done * 100) / stage.total
