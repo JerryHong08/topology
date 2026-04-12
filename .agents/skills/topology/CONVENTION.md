@@ -1,5 +1,7 @@
 # Topology Markdown Convention
 
+**CRITICAL: Read this document before modifying ROADMAP.md or ARCHIVE.md.**
+
 Topology builds a project graph by scanning markdown. This document defines the markdown writing conventions so both humans and agents can efficiently draw and read the map.
 
 ## Core principles
@@ -7,6 +9,7 @@ Topology builds a project graph by scanning markdown. This document defines the 
 1. **ROADMAP.md is a snapshot of current state**, not a history log. Keep it readable and scannable.
 2. **roadmap/ directory holds expanded details**, linked back from ROADMAP.md.
 3. **Standard markdown only** — no custom syntax. Humans can read it directly, topology can parse it.
+4. **Use `topo` commands for operations** — do not directly edit ROADMAP.md/ARCHIVE.md unless absolutely necessary.
 
 ## File structure
 
@@ -20,6 +23,33 @@ roadmap/
 - ROADMAP.md only keeps **active** tasks (todo / in-progress)
 - Done or dropped tasks are archived to `ARCHIVE.md` via `topo archive`
 - Tasks needing expanded discussion get a detail file under `roadmap/`, linked from ROADMAP.md
+
+## ARCHIVE.md structure rules
+
+**ARCHIVE.md only contains numbered sections. No inbox sections allowed.**
+
+```
+# Archive
+
+## 1. Core
+- [x] 1.1 Done task
+
+## 2. Edges
+- [~] 2.3 Dropped task
+```
+
+**Wrong:**
+```markdown
+# Archive
+
+## 1. Core
+...
+
+## Open Issues              ← ❌ Inbox section in archive
+- [x] Some issue
+```
+
+**Why:** Inbox items were never tracked. They must be promoted to numbered sections before archiving.
 
 ## Heading structure
 
@@ -66,10 +96,32 @@ Unnumbered headings after numbered sections collect unprocessed items:
 - Tasks in inbox sections don't get numeric IDs either
 - **No number = unprocessed** — this is a signal by itself
 
-**Inbox workflow:**
-1. **Capture** — quickly jot ideas/issues in any inbox section (no numeric ID needed)
-2. **Triage** — when ready to work on it, move to a numbered section and assign an ID
+**Inbox workflow (IMPORTANT):**
+
+```
+┌─────────┐    ┌──────────────────┐    ┌─────────┐    ┌──────────┐
+│  Inbox  │ →  │ Numbered Section │ →  │  Track  │ →  │  Archive │
+│ (no ID) │    │  (assign ID)     │    │ (topo)  │    │  (topo)  │
+└─────────┘    └──────────────────┘    └─────────┘    └──────────┘
+```
+
+**RULE: Inbox content cannot be archived directly.**
+
+The correct lifecycle:
+1. **Capture** — quickly jot ideas/issues in inbox (no numeric ID needed)
+2. **Promote** — move to numbered section and assign ID
 3. **Track** — now it can be updated via `topo update <ID> status=...`
+4. **Archive** — only after it has a numeric ID
+
+**Wrong:**
+- ARCHIVE.md contains `## Open Issues` section ❌
+- Inbox items deleted or archived without promotion ❌
+- Directly editing ROADMAP.md/ARCHIVE.md instead of using `topo` ❌
+
+**Right:**
+- ARCHIVE.md only has numbered sections ✓
+- Inbox items promoted before archiving ✓
+- Use `topo add`, `topo update`, `topo archive` for operations ✓
 
 Only tasks in numbered sections have stable IDs. Inbox tasks must be promoted before they can be tracked via CLI.
 
@@ -118,10 +170,10 @@ Usage:
 
 | Status | Markdown | topo update |
 |--------|----------|-------------|
-| todo | `- [ ]` | `status=todo` |
-| in-progress | `- [-]` | `status=in-progress` |
-| done | `- [x]` | `status=done` |
-| dropped | `- [~]` | `status=dropped` |
+| todo | `- [ ] x.x` | `status=todo` |
+| in-progress | `- [-] x.x` | `status=in-progress` |
+| done | `- [x] x.x` | `status=done` |
+| dropped | `- [~] x.x` | `status=dropped` |
 
 ### Linked docs
 
@@ -192,7 +244,7 @@ Concrete implementation steps.
 - Small, well-defined feature additions
 - Documentation-only updates
 
-After discussion, update ROADMAP.md (assign ID, link detail doc) and the task enters todo status.
+After discussion, add task to ROADMAP.md with `topo add`, assign ID, link detail doc.
 
 ### Archiving
 
@@ -207,6 +259,24 @@ Archived tasks keep their IDs and section grouping. They remain queryable in the
 
 ## Agent workflow
 
+**Always use `topo` commands for roadmap operations:**
+
+| Operation | Command |
+|-----------|---------|
+| View tasks | `topo query --status` |
+| Task details | `topo context <ID>` |
+| Add task | `topo add "description" --section <N>` |
+| Update status | `topo update <ID> status=<status>` |
+| Delete task | `topo delete <ID>` |
+| Archive | `topo archive` |
+| Unarchive | `topo unarchive <ID>` |
+| Refresh graph | `topo scan .` |
+
+**Do NOT directly edit ROADMAP.md or ARCHIVE.md** unless:
+- Manual cleanup is required (e.g., fixing formatting issues)
+- Promoting inbox items to numbered sections
+- The operation is not supported by `topo` CLI
+
 ### Read the map
 
 ```bash
@@ -220,16 +290,15 @@ topo context 1.1                          # read task details
 2. Check history: any similar dropped tasks in `ARCHIVE.md`? Why were they dropped?
 3. Analyze impact: which modules are affected? What are the risks?
 4. If discussion is needed, write Context / Analysis / Decision in `roadmap/<slug>.md`
-5. Add conclusion to ROADMAP.md, assign ID, link detail doc
-6. `topo scan .` to refresh graph
+5. Add to ROADMAP.md: `topo add "description" --section <N> --discuss`
+6. Link detail doc if created
 
 ### Draw the map (simple tasks)
 
-1. Decide which section the task belongs to
-2. Assign the next available numeric ID
-3. Link detail doc if needed
-4. Write to ROADMAP.md
-5. `topo scan .` to refresh graph
+```bash
+topo add "Task description" --section 1    # add to section 1
+topo scan .                                # refresh graph
+```
 
 ### Execute
 
@@ -238,6 +307,16 @@ topo update 1.1 status=in-progress    # start
 topo update 1.1 status=done           # complete
 topo archive                          # clean up
 ```
+
+### Promoting inbox items
+
+When an inbox item is ready to be worked on:
+
+1. Find the appropriate numbered section
+2. Assign the next available ID in that section
+3. Move the task from inbox to that section with the ID
+4. Now use `topo update <ID> status=in-progress` to track it
+5. Run `topo scan .` to refresh
 
 ## Full example
 
@@ -255,5 +334,5 @@ topo archive                          # clean up
 - [~] 2.2 GUI — deferred
 
 ## Open Issues
-- `--roots` needs per-file root detection
+- [ ] `--roots` needs per-file root detection
 ```
