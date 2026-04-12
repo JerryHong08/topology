@@ -1,6 +1,6 @@
 use anyhow::Result;
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -14,56 +14,118 @@ pub struct RawLink {
     pub source_file: String,
 }
 
+/// Collect the whitelist of files that should always be scanned.
+fn collect_whitelist(root: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+
+    // Root-level core files
+    for name in &["ROADMAP.md", "ARCHIVE.md"] {
+        if root.join(name).is_file() {
+            files.push(name.to_string());
+        }
+    }
+
+    // roadmap/ directory
+    if let Ok(entries) = fs::read_dir(root.join("roadmap")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) == Some("md") {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    files.push(format!("roadmap/{}", name));
+                }
+            }
+        }
+    }
+
+    files
+}
+
+/// Extract a .md file path from a link URL, resolved relative to the source file.
+/// Returns None for external URLs, anchors, or non-.md paths.
+fn extract_md_path(url: &str, source_file: &str) -> Option<String> {
+    if url.starts_with("http://") || url.starts_with("https://") || url.starts_with("mailto:") {
+        return None;
+    }
+    if url.starts_with('#') {
+        return None; // anchor only, same file
+    }
+
+    let (path_part, _anchor) = match url.split_once('#') {
+        Some((p, a)) => (p, Some(a)),
+        None => (url, None),
+    };
+
+    if path_part.is_empty() || !path_part.ends_with(".md") {
+        return None;
+    }
+
+    // Resolve relative to source file's directory
+    let source_dir = Path::new(source_file)
+        .parent()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+
+    let full_path = if source_dir.is_empty() {
+        path_part.to_string()
+    } else {
+        format!("{}/{}", source_dir, path_part)
+    };
+
+    // Normalize (remove ./ and ../)
+    let mut parts: Vec<&str> = Vec::new();
+    for part in full_path.split('/') {
+        match part {
+            "." | "" => {}
+            ".." => { parts.pop(); }
+            _ => parts.push(part),
+        }
+    }
+    Some(parts.join("/"))
+}
+
 impl MarkdownScanner {
     pub fn scan_with_links(&self, root: &Path, links: &mut Vec<RawLink>) -> Result<Graph> {
         let root = root.canonicalize()?;
         let mut graph = Graph::default();
+        let mut scanned: HashSet<String> = HashSet::new();
 
-        // Create a gitignore matcher for filtering
-        let gitignore = ignore::gitignore::Gitignore::new(root.join(".gitignore")).0;
+        // Seed with whitelist files
+        let mut queue: Vec<String> = collect_whitelist(&root);
 
-        // Disable WalkBuilder's gitignore — we handle it ourselves with
-        // special-case exceptions for ROADMAP.md and roadmap/ (which users
-        // commonly gitignore but topo must still read).
-        let mut builder = ignore::WalkBuilder::new(&root);
-        builder.hidden(false);
-        builder.git_ignore(false);
-        builder.git_global(false);
-        builder.git_exclude(false);
+        // Iteratively scan files and follow their links
+        loop {
+            let mut new_links: Vec<RawLink> = Vec::new();
+            let mut discovered: Vec<String> = Vec::new();
 
-        for entry in builder.filter_entry(|e| e.file_name() != ".git").build() {
-            let entry = entry?;
-            let abs = entry.path();
-            if !abs.is_file() {
-                continue;
-            }
-            let ext = abs.extension().and_then(|e| e.to_str());
-            if ext != Some("md") {
-                continue;
-            }
+            while let Some(file_id) = queue.pop() {
+                if scanned.contains(&file_id) {
+                    continue;
+                }
+                scanned.insert(file_id.clone());
 
-            let rel = abs.strip_prefix(&root)?;
-            let rel_str = rel.to_string_lossy();
-            let file_id = if rel.as_os_str().is_empty() {
-                root.file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default()
-            } else {
-                rel_str.replace('\\', "/")
-            };
-
-            // Check if file is gitignored
-            let is_gitignored = gitignore.matched(&rel, false).is_ignore();
-
-            // Always allow ROADMAP.md and roadmap/*.md even if gitignored
-            let is_roadmap = file_id == "ROADMAP.md" || file_id.starts_with("roadmap/");
-
-            if is_gitignored && !is_roadmap {
-                continue;
+                let abs = root.join(&file_id);
+                if !abs.is_file() {
+                    continue;
+                }
+                let content = fs::read_to_string(&abs)?;
+                parse_markdown(&file_id, &content, &mut graph, &mut new_links);
             }
 
-            let content = fs::read_to_string(abs)?;
-            parse_markdown(&file_id, &content, &mut graph, links);
+            // Find new .md files from links
+            for link in &new_links {
+                if let Some(path) = extract_md_path(&link.target_url, &link.source_file) {
+                    if !scanned.contains(&path) && root.join(&path).is_file() {
+                        discovered.push(path);
+                    }
+                }
+            }
+
+            links.extend(new_links);
+
+            if discovered.is_empty() {
+                break;
+            }
+            queue = discovered;
         }
 
         Ok(graph)

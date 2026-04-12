@@ -79,15 +79,10 @@ fn read_cache_if_fresh(cache_path: &Path, root: &Path) -> Option<Graph> {
 
 fn newest_source_mtime(root: &Path) -> Option<SystemTime> {
     let mut newest = SystemTime::UNIX_EPOCH;
-    let walker = ignore::WalkBuilder::new(root)
-        .hidden(false)
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            name != ".git" && name != CACHE_FILE
-        })
-        .build();
-    for entry in walker.flatten() {
-        if let Ok(meta) = entry.metadata() {
+
+    // Check the same whitelist as the scanner
+    for name in &["ROADMAP.md", "ARCHIVE.md"] {
+        if let Ok(meta) = std::fs::metadata(root.join(name)) {
             if let Ok(mtime) = meta.modified() {
                 if mtime > newest {
                     newest = mtime;
@@ -95,6 +90,20 @@ fn newest_source_mtime(root: &Path) -> Option<SystemTime> {
             }
         }
     }
+
+    // roadmap/ directory
+    if let Ok(entries) = std::fs::read_dir(root.join("roadmap")) {
+        for entry in entries.flatten() {
+            if let Ok(meta) = entry.metadata() {
+                if let Ok(mtime) = meta.modified() {
+                    if mtime > newest {
+                        newest = mtime;
+                    }
+                }
+            }
+        }
+    }
+
     if newest == SystemTime::UNIX_EPOCH { None } else { Some(newest) }
 }
 
