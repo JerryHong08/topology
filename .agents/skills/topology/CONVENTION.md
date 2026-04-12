@@ -10,6 +10,7 @@ Topology builds a project graph by scanning markdown. This document defines the 
 2. **roadmap/ directory holds expanded details**, linked back from ROADMAP.md.
 3. **Standard markdown only** — no custom syntax. Humans can read it directly, topology can parse it.
 4. **Use `topo` commands for operations** — do not directly edit ROADMAP.md/ARCHIVE.md unless absolutely necessary.
+5. **ROADMAP.md is an index, not a notebook** — all analysis, bug details, and design notes go in `roadmap/<slug>.md` detail docs. Only task titles belong in ROADMAP.md.
 
 ## File structure
 
@@ -66,6 +67,7 @@ roadmap/
 
 **Rules:**
 - H2 headings use numeric prefixes as section numbers (`## 1.`, `## 2.`)
+- Do NOT repeat the number in the heading text (`## 8. Web UI` not `## 8. 8. Web UI`)
 - H2 is the primary grouping level, divided by the project's architectural boundaries
 - H3 only when sub-grouping is necessary
 - No H4+ — too much nesting makes the map hard to read
@@ -94,6 +96,7 @@ Unnumbered headings after numbered sections collect unprocessed items:
 **Rules:**
 - Inbox headings have no numeric prefix
 - Tasks in inbox sections don't get numeric IDs either
+- **Inbox items MUST use `- [ ]` checkbox format** — plain text lines are invisible to `topo query`
 - **No number = unprocessed** — this is a signal by itself
 
 **Inbox workflow (IMPORTANT):**
@@ -137,8 +140,10 @@ Only tasks in numbered sections have stable IDs. Inbox tasks must be promoted be
 ### Rules
 
 - Numeric ID goes after the checkbox, before the task description
+- Do NOT repeat the numeric ID in the description text (`- [ ] 8.4 Task` not `- [ ] 8.4 8.4 Task`)
 - Numeric IDs are **stable identifiers** — once assigned, they don't change even if the title is edited
 - IDs only increment, never reuse — deleted/archived tasks keep their numbers
+- **Always check ARCHIVE.md before assigning a new ID** to avoid conflicts with archived tasks
 - Agent is responsible for assigning IDs; humans don't need to worry about it
 
 ### Parser extraction
@@ -255,7 +260,8 @@ topo archive --dry-run    # preview
 topo archive              # execute
 ```
 
-Archived tasks keep their IDs and section grouping. They remain queryable in the graph.
+- Archived tasks keep their IDs and section grouping. They remain queryable in the graph.
+- **Archive promptly** — when `topo query --status` shows a section is fully done/dropped, run `topo archive`. Don't let done tasks pile up.
 
 ## Agent workflow
 

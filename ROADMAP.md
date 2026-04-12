@@ -6,18 +6,15 @@
 
 ## 7. Roadmap
 
-- [ ] 7.1 Section management CLI/API — `topo section add`, `move`, `rename`
-- [ ] 7.2 Canvas view prototype (react-flow)
-- [ ] 7.3 Layout JSON persistence and sync
 - [ ] 7.4 Web UI — ship task to agent work pipeline & roadmap
 
 ## 8. Web UI
 
-- [ ] 8.1 Document workspace editing — edit and save documents
-- [ ] 8.2 List view toggle — canvas/list mode switch
-- [ ] 8.3 Create task at viewport center — not fixed position
-- [ ] 8.4 Gantt chart view — timeline-based task progress and dependencies
-- [ ] 8.5 ACT-R decision simulation model — cognitive architecture for task decision support
+- [ ] 8.18 Document workspace editing — edit and save documents
+- [ ] 8.19 List view toggle — canvas/list mode switch
+- [ ] 8.20 Create task at viewport center — not fixed position
+- [ ] 8.21 Gantt chart view — timeline-based task progress and dependencies
+- [ ] 8.22 ACT-R decision simulation model — cognitive architecture for task decision support
 
 ## 9. Task.md Convention
 

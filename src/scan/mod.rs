@@ -18,7 +18,32 @@ fn build_graph(root: &Path) -> Result<Graph> {
     let mut links = Vec::new();
     graph.add(markdown::MarkdownScanner.scan_with_links(root, &mut links)?);
     resolve_references(&mut graph, &links);
+    check_id_conflicts(&graph);
     Ok(graph)
+}
+
+/// Check for numeric ID conflicts between ROADMAP.md and ARCHIVE.md.
+fn check_id_conflicts(graph: &Graph) {
+    use std::collections::HashMap;
+
+    // Collect stable_ids by file
+    let mut by_file: HashMap<&str, Vec<&str>> = HashMap::new(); // file → stable_ids
+    for node in &graph.nodes {
+        if let Some(sid) = node.metadata.as_ref().and_then(|m| m.get("stable_id")).and_then(|v| v.as_str()) {
+            if let Some(file) = node.id.split('#').next() {
+                by_file.entry(file).or_default().push(sid);
+            }
+        }
+    }
+
+    let roadmap_ids: HashSet<&str> = by_file.get("ROADMAP.md").map(|v| v.iter().copied().collect()).unwrap_or_default();
+    let archive_ids: HashSet<&str> = by_file.get("ARCHIVE.md").map(|v| v.iter().copied().collect()).unwrap_or_default();
+
+    let conflicts: Vec<&str> = roadmap_ids.intersection(&archive_ids).copied().collect();
+    if !conflicts.is_empty() {
+        eprintln!("Warning: ID conflicts between ROADMAP.md and ARCHIVE.md: {}", conflicts.iter().map(|s| s.to_string()).collect::<Vec<_>>().join(", "));
+        eprintln!("  Run `topo archive --fix` to auto-resolve.");
+    }
 }
 
 pub fn run_cached(root: &Path) -> Result<Graph> {
