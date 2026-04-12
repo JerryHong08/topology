@@ -1,5 +1,5 @@
 use crate::graph::{Edge, EdgeKind, Graph, Node, NodeKind};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 pub enum Traversal {
     None,
@@ -34,7 +34,12 @@ impl Filter {
         }
     }
 
-    pub fn matches(&self, node: &Node) -> bool {
+    pub fn matches(&self, node: &Node, section_id: Option<&str>) -> bool {
+        // Special case: section filter uses the precomputed section_id
+        if self.field == "section" {
+            return section_id.map(|s| s == self.value).unwrap_or(false);
+        }
+
         let Some(val) = node_field_value(node, &self.field) else {
             return false;
         };
@@ -65,7 +70,80 @@ fn node_field_value(node: &Node, field: &str) -> Option<String> {
     }
 }
 
+/// Build a map from each node to its H2 section's number (e.g., "6", "7", "11").
+/// This allows filtering by section number.
+fn build_section_map(graph: &Graph) -> HashMap<String, String> {
+    let mut section_map: HashMap<String, String> = HashMap::new();
+
+    // Build children map
+    let mut children: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edge in &graph.edges {
+        if edge.kind == EdgeKind::Contains {
+            children.entry(edge.source.as_str()).or_default().push(edge.target.as_str());
+        }
+    }
+
+    // For each H2 section, extract its number and propagate to all descendants
+    for node in &graph.nodes {
+        if node.kind != NodeKind::Section {
+            continue;
+        }
+        let level = node.metadata
+            .as_ref()
+            .and_then(|m| m.get("level"))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0);
+        if level != 2 {
+            continue;
+        }
+
+        // Extract section number from label (e.g., "11. Robustness" → "11")
+        let section_num = extract_section_number(&node.label);
+
+        // Propagate section number to all descendants
+        section_map.insert(node.id.clone(), section_num.clone());
+
+        let mut queue: VecDeque<&str> = VecDeque::new();
+        queue.push_back(node.id.as_str());
+        while let Some(cur) = queue.pop_front() {
+            if let Some(kids) = children.get(cur) {
+                for kid in kids {
+                    section_map.insert(kid.to_string(), section_num.clone());
+                    queue.push_back(kid);
+                }
+            }
+        }
+    }
+
+    section_map
+}
+
+/// Extract section number from a label like "11. Robustness" → "11"
+/// Returns "0" if no number found (e.g., "Open Issues")
+fn extract_section_number(label: &str) -> String {
+    let trimmed = label.trim();
+    // Match digits at the start, possibly followed by a dot
+    let mut digits = String::new();
+    for c in trimmed.chars() {
+        if c.is_ascii_digit() {
+            digits.push(c);
+        } else if c == '.' {
+            continue;
+        } else {
+            break;
+        }
+    }
+    if digits.is_empty() {
+        "0".to_string()
+    } else {
+        digits
+    }
+}
+
 pub fn execute(graph: &Graph, traversal: &Traversal, filters: &[Filter]) -> Graph {
+    // Build section map: node_id -> H2 section stable_id (e.g., "1", "2", "11")
+    let section_map = build_section_map(graph);
+
     // Step 1: traversal → candidate node IDs
     let candidate_ids: HashSet<&str> = match traversal {
         Traversal::None => graph.nodes.iter().map(|n| n.id.as_str()).collect(),
@@ -129,7 +207,10 @@ pub fn execute(graph: &Graph, traversal: &Traversal, filters: &[Filter]) -> Grap
         .nodes
         .iter()
         .filter(|n| candidate_ids.contains(n.id.as_str()))
-        .filter(|n| filters.iter().all(|f| f.matches(n)))
+        .filter(|n| {
+            let section_id = section_map.get(n.id.as_str()).map(|s| s.as_str());
+            filters.iter().all(|f| f.matches(n, section_id))
+        })
         .cloned()
         .collect();
 
