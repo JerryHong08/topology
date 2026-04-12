@@ -331,38 +331,7 @@ fn main() -> Result<()> {
                 let valid: HashSet<&str> = roadmap.nodes.iter().map(|n| n.id.as_str()).collect();
                 roadmap.edges.retain(|e| valid.contains(e.source.as_str()) && valid.contains(e.target.as_str()));
                 let s = status::build(&roadmap);
-                // Print agent-native format instead of JSON
-                println!("Progress: {}/{} tasks done", s.done, s.total);
-                if s.todo > 0 {
-                    println!("Remaining: {}", s.todo);
-                }
-                println!();
-                for stage in &s.stages {
-                    if stage.total == 0 {
-                        continue;
-                    }
-                    let pct = if stage.total > 0 {
-                        (stage.done * 100) / stage.total
-                    } else {
-                        0
-                    };
-                    println!("{} — {}/{} ({}%)", stage.name, stage.done, stage.total, pct);
-                    for task in &stage.tasks {
-                        let marker = match task.status.as_str() {
-                            "done" => "[x]",
-                            "in-progress" => "[-]",
-                            "dropped" => "[~]",
-                            _ => "[ ]",
-                        };
-                        let prefix = task.stable_id.as_deref().map(|sid| format!("{} ", sid)).unwrap_or_default();
-                        if let Some(sub) = &task.subtasks {
-                            println!("  {} {}{}/{} subtasks", marker, prefix, sub.done, sub.total);
-                        } else {
-                            println!("  {} {}{}", marker, prefix, task.label);
-                        }
-                    }
-                    println!();
-                }
+                status::print(&s);
                 return Ok(());
             }
 

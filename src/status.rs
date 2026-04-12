@@ -50,13 +50,18 @@ pub fn run(roadmap_path: &Path) -> Result<()> {
     parse_markdown(&file_id, &content, &mut graph, &mut Vec::new());
 
     let output = build(&graph);
+    print(&output);
+    Ok(())
+}
 
-    // Print agent-native format
+pub fn print(output: &StatusOutput) {
     println!("Progress: {}/{} tasks done", output.done, output.total);
     if output.todo > 0 {
         println!("Remaining: {}", output.todo);
     }
     println!();
+
+    let mut archivable_sections: Vec<&str> = Vec::new();
 
     for stage in &output.stages {
         if stage.total == 0 {
@@ -83,9 +88,16 @@ pub fn run(roadmap_path: &Path) -> Result<()> {
             }
         }
         println!();
+
+        // Check if all tasks in this section are done or dropped
+        if stage.total > 0 && stage.tasks.iter().all(|t| t.status == "done" || t.status == "dropped") {
+            archivable_sections.push(&stage.name);
+        }
     }
 
-    Ok(())
+    if !archivable_sections.is_empty() {
+        println!("Hint: {} — all tasks done/dropped. If no more tasks are planned for these sections, run `topo archive` to clean up.", archivable_sections.join(", "));
+    }
 }
 
 pub fn build(graph: &Graph) -> StatusOutput {
